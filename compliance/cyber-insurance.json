@@ -1,0 +1,108 @@
+{
+  "framework": "Cyber Insurance Common Requirements",
+  "version": "2025",
+  "description": "Common security controls required by cyber insurance underwriters, mapped to M365 assessment checks",
+  "controls": {
+    "CI.MFA.1": {
+      "title": "MFA for all remote access",
+      "question": "Is multi-factor authentication enabled for all remote access to the network and cloud services?",
+      "checks": ["MFA", "ConditionalAccess"],
+      "evidence": "MFA enrollment percentage, CA policies requiring MFA",
+      "required": true,
+      "typical_impact": "Policy denial or significant premium increase if MFA is not enforced"
+    },
+    "CI.MFA.2": {
+      "title": "MFA for privileged accounts",
+      "question": "Is MFA enforced for all accounts with administrative privileges?",
+      "checks": ["MFA", "PrivilegedAccess", "ConditionalAccess"],
+      "evidence": "Admin MFA status, PIM configuration, CA policies targeting admin roles",
+      "required": true,
+      "typical_impact": "Policy denial"
+    },
+    "CI.MFA.3": {
+      "title": "MFA for email access",
+      "question": "Is MFA required for all email access including mobile devices?",
+      "checks": ["MFA", "ConditionalAccess", "Exchange"],
+      "evidence": "CA policies for Exchange Online, ActiveSync policies, mobile device management",
+      "required": true,
+      "typical_impact": "Premium surcharge 15-30%"
+    },
+    "CI.PAM.1": {
+      "title": "Privileged access management",
+      "question": "Are privileged accounts managed with just-in-time access and monitored?",
+      "checks": ["PrivilegedAccess"],
+      "evidence": "PIM eligibility vs permanent assignments, Global Admin count, break-glass procedures",
+      "required": true,
+      "typical_impact": "Premium increase 10-25%"
+    },
+    "CI.EDR.1": {
+      "title": "Endpoint detection and response",
+      "question": "Is EDR deployed on all endpoints with 24/7 monitoring?",
+      "checks": ["Defender", "Intune"],
+      "evidence": "Defender for Endpoint deployment coverage, onboarding status, alert response SLAs",
+      "required": true,
+      "typical_impact": "Policy denial or premium increase 20-40%"
+    },
+    "CI.PATCH.1": {
+      "title": "Patch management",
+      "question": "Is there a formal patch management process with critical patches applied within 14 days?",
+      "checks": ["Intune"],
+      "evidence": "Windows Update compliance, update ring configuration, patch compliance percentage",
+      "required": true,
+      "typical_impact": "Premium increase 10-20%"
+    },
+    "CI.EMAIL.1": {
+      "title": "Email security",
+      "question": "Are email filtering and anti-phishing protections in place?",
+      "checks": ["Exchange", "Defender"],
+      "evidence": "Defender for Office 365 policies, anti-phishing, safe links, safe attachments",
+      "required": true,
+      "typical_impact": "Premium surcharge 10-15%"
+    },
+    "CI.BACKUP.1": {
+      "title": "Data backup",
+      "question": "Are backups performed regularly, tested, and stored offline or immutably?",
+      "checks": [],
+      "evidence": "Manual attestation required — M365 native backup is limited",
+      "required": true,
+      "typical_impact": "Policy denial"
+    },
+    "CI.LEGACY.1": {
+      "title": "Legacy authentication disabled",
+      "question": "Are legacy authentication protocols (POP3, IMAP, SMTP Auth) disabled?",
+      "checks": ["ConditionalAccess"],
+      "evidence": "CA policy blocking legacy auth, authentication methods policy",
+      "required": false,
+      "typical_impact": "Premium reduction 5-10% when addressed"
+    },
+    "CI.STALE.1": {
+      "title": "Account lifecycle management",
+      "question": "Is there a process to disable accounts within 24 hours of employee departure?",
+      "checks": ["StaleAccounts"],
+      "evidence": "Stale account count, offboarding automation, access reviews",
+      "required": false,
+      "typical_impact": "Underwriting consideration"
+    },
+    "CI.TRAIN.1": {
+      "title": "Security awareness training",
+      "question": "Do all employees complete security awareness training at least annually?",
+      "checks": [],
+      "evidence": "Manual attestation — check Attack Simulation Training in Defender",
+      "required": true,
+      "typical_impact": "Premium surcharge 5-10%"
+    },
+    "CI.IR.1": {
+      "title": "Incident response plan",
+      "question": "Is there a documented and tested incident response plan?",
+      "checks": ["SignInRisk", "Defender"],
+      "evidence": "Identity Protection policies, automated response actions, alert playbooks",
+      "required": true,
+      "typical_impact": "Policy condition"
+    }
+  },
+  "scoring": {
+    "method": "Required controls met / total required controls × 100",
+    "pass_threshold": 80,
+    "note": "Most underwriters require 100% on MFA and PAM controls for policy binding"
+  }
+}

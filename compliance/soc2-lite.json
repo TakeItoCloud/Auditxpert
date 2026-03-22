@@ -1,0 +1,68 @@
+{
+  "framework": "SOC 2 Type II (Simplified)",
+  "version": "2017 Trust Service Criteria — Lite",
+  "description": "SOC 2 Trust Service Criteria mapped to M365 assessment checks. Simplified for SMB and MSP engagements. Focus on the CC (Common Criteria) series most relevant to cloud service configurations.",
+  "controls": {
+    "CC1.1": {
+      "title": "COSO Principle 1 — Integrity and Ethical Values",
+      "checks": ["PasswordPolicy", "AuthMethods"],
+      "evidence": "Password protection policies, banned passwords, self-service password reset configuration, authentication methods policy"
+    },
+    "CC6.1": {
+      "title": "Logical and Physical Access Controls — Authentication",
+      "checks": ["MFA", "ConditionalAccess", "SignInRisk"],
+      "evidence": "MFA enrollment percentage, Conditional Access policies requiring MFA, sign-in risk policies, Identity Protection configuration"
+    },
+    "CC6.2": {
+      "title": "User Provisioning and Deprovisioning",
+      "checks": ["StaleAccounts", "GuestAccounts"],
+      "evidence": "Stale/dormant account list (no sign-in >X days), pending guest invitations, guest account age, offboarding hygiene"
+    },
+    "CC6.3": {
+      "title": "Role-Based Access and Least Privilege",
+      "checks": ["PrivilegedAccess"],
+      "evidence": "Global Administrator count, permanent vs. eligible role assignments, PIM configuration, privileged service principals"
+    },
+    "CC6.6": {
+      "title": "Security Against Threats and Vulnerabilities from External Sources",
+      "checks": ["AntiPhishing", "Exchange", "Defender"],
+      "evidence": "Anti-phishing policies, Safe Links, Safe Attachments, Defender for Office 365 preset policies, external forwarding rules"
+    },
+    "CC6.7": {
+      "title": "Data Transmission and Storage Protection",
+      "checks": ["Encryption", "Connectors", "ExternalForwarding"],
+      "evidence": "Device encryption status (BitLocker/FileVault), connector TLS enforcement, external mail forwarding rules, DMARC/DKIM records"
+    },
+    "CC6.8": {
+      "title": "Endpoint Security and Device Compliance",
+      "checks": ["Intune", "DeviceCompliance"],
+      "evidence": "Intune device compliance percentage, compliance policies, App Protection (MAM) policies, stale device count"
+    },
+    "CC7.1": {
+      "title": "Detection and Monitoring of Security Events",
+      "checks": ["SignInRisk", "Defender", "SecurityAlerts"],
+      "evidence": "Identity Protection risky user detections, Defender alerts configuration, audit log retention, monitoring coverage"
+    },
+    "CC7.2": {
+      "title": "Incident Response and Communication",
+      "checks": ["Alerts", "Incidents"],
+      "evidence": "Open security alerts by severity and age, active security incidents, automated investigation activity, response SLA evidence"
+    },
+    "CC7.3": {
+      "title": "Vulnerability Identification and Remediation",
+      "checks": ["SecureScore", "PatchManagement"],
+      "evidence": "Microsoft Secure Score and top improvement actions, Windows Update compliance, OS version currency, patch ring configuration"
+    },
+    "CC8.1": {
+      "title": "Change Management Controls",
+      "checks": ["DeviceConfiguration", "SecurityBaseline"],
+      "evidence": "Security baseline deployment status, device configuration profiles, unassigned or missing critical profiles"
+    }
+  },
+  "coverage_calculation": "Number of controls with at least one passing check / total mapped controls × 100",
+  "scoring": {
+    "method": "Controls passing / total controls × 100",
+    "pass_threshold": 75,
+    "note": "CC6.1 (MFA) and CC6.3 (Privileged Access) are typically gate controls for SOC 2 audit readiness"
+  }
+}

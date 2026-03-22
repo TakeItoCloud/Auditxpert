@@ -1,0 +1,83 @@
+{
+  "framework": "ISO 27001:2022",
+  "version": "2022",
+  "description": "Information security management system requirements — Annex A control mappings to M365 assessment checks",
+  "controls": {
+    "A.5.1": {
+      "title": "Policies for information security",
+      "checks": ["PasswordPolicy", "ConditionalAccess"],
+      "evidence": "Conditional Access policies, password protection settings, authentication methods policy"
+    },
+    "A.8.2": {
+      "title": "Privileged access rights",
+      "checks": ["PrivilegedAccess"],
+      "evidence": "Directory role assignments, PIM configuration, Global Admin count"
+    },
+    "A.8.3": {
+      "title": "Information access restriction",
+      "checks": ["ConditionalAccess", "Applications"],
+      "evidence": "CA policies restricting access by location, device, risk level; app permission grants"
+    },
+    "A.8.5": {
+      "title": "Secure authentication",
+      "checks": ["MFA", "AuthMethods", "PasswordPolicy"],
+      "evidence": "MFA enrollment rates, authentication methods enabled, password protection"
+    },
+    "A.5.15": {
+      "title": "Access control",
+      "checks": ["ConditionalAccess", "PrivilegedAccess", "GuestAccounts"],
+      "evidence": "CA policy coverage, role assignments, guest access controls"
+    },
+    "A.5.16": {
+      "title": "Identity management",
+      "checks": ["StaleAccounts", "GuestAccounts", "Applications"],
+      "evidence": "User lifecycle management, stale account detection, app registration hygiene"
+    },
+    "A.5.17": {
+      "title": "Authentication information",
+      "checks": ["MFA", "PasswordPolicy", "AuthMethods"],
+      "evidence": "MFA methods, password policies, FIDO2/passwordless status"
+    },
+    "A.5.18": {
+      "title": "Access rights",
+      "checks": ["PrivilegedAccess", "Applications", "GuestAccounts"],
+      "evidence": "Role assignments, app permissions, guest account reviews"
+    },
+    "A.8.15": {
+      "title": "Logging",
+      "checks": ["SignInRisk"],
+      "evidence": "Sign-in logs, audit logs, risk detection events"
+    },
+    "A.8.16": {
+      "title": "Monitoring activities",
+      "checks": ["SignInRisk", "Defender"],
+      "evidence": "Identity Protection alerts, Defender incidents, risky user detections"
+    },
+    "A.5.23": {
+      "title": "Information security for use of cloud services",
+      "checks": ["ConditionalAccess", "Applications", "Defender"],
+      "evidence": "Cloud app governance, OAuth consent policies, CASB configuration"
+    },
+    "A.5.24": {
+      "title": "Information security incident management planning and preparation",
+      "checks": ["SignInRisk", "Defender"],
+      "evidence": "Incident response policies, alert configuration, automated response"
+    },
+    "A.6.1": {
+      "title": "Screening",
+      "checks": ["GuestAccounts"],
+      "evidence": "Guest invitation policies, external collaboration settings"
+    },
+    "A.7.9": {
+      "title": "Security of assets off-premises",
+      "checks": ["Intune", "ConditionalAccess"],
+      "evidence": "Device compliance policies, MAM policies, location-based CA"
+    },
+    "A.8.1": {
+      "title": "User endpoint devices",
+      "checks": ["Intune"],
+      "evidence": "Device compliance, encryption status, OS update compliance"
+    }
+  },
+  "coverage_calculation": "Number of controls with at least one passing check / total mapped controls × 100"
+}

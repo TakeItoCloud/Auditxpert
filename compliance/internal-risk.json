@@ -1,0 +1,63 @@
+{
+  "framework": "Internal Risk Assessment",
+  "version": "1.0",
+  "description": "Generic internal IT security risk review framework. Use for organisations without a specific external compliance requirement. Covers all major M365 security domains with plain-language controls suitable for internal audit committees and board reporting.",
+  "controls": {
+    "IR.ID.1": {
+      "title": "Identity Hygiene — User Account Security",
+      "checks": ["MFA", "StaleAccounts", "GuestAccounts"],
+      "evidence": "MFA coverage, stale/dormant accounts, guest account age and pending invitations, disabled account cleanup"
+    },
+    "IR.ID.2": {
+      "title": "Privileged Access Management",
+      "checks": ["PrivilegedAccess"],
+      "evidence": "Global Admin count, permanent vs. time-limited admin access, PIM usage, service principal privilege exposure"
+    },
+    "IR.AC.1": {
+      "title": "Access Control Policies",
+      "checks": ["ConditionalAccess", "PasswordPolicy", "AuthMethods"],
+      "evidence": "Conditional Access policy coverage, legacy auth blocking, password protection, FIDO2/passwordless adoption"
+    },
+    "IR.DP.1": {
+      "title": "Data Protection Controls",
+      "checks": ["ExternalForwarding", "DomainSecurity", "Encryption"],
+      "evidence": "External mail forwarding rules, DMARC/DKIM enforcement, device encryption status, data-in-transit protection"
+    },
+    "IR.EP.1": {
+      "title": "Endpoint Security",
+      "checks": ["Intune", "DeviceCompliance", "EncryptionStatus", "DefenderForEndpoint"],
+      "evidence": "Device compliance percentage, encryption coverage, Defender for Endpoint onboarding, security baselines"
+    },
+    "IR.TD.1": {
+      "title": "Threat Detection and Monitoring",
+      "checks": ["SignInRisk", "Defender", "SecurityAlerts", "SecureScore"],
+      "evidence": "Identity Protection risk policies, open security alerts, active incidents, Secure Score, audit log coverage"
+    },
+    "IR.IR.1": {
+      "title": "Incident Response Readiness",
+      "checks": ["Incidents", "Alerts", "AutomatedResponse"],
+      "evidence": "Active incident count and age, unresolved high/critical alerts, automated investigation configuration"
+    },
+    "IR.CM.1": {
+      "title": "Configuration Management",
+      "checks": ["SecurityBaseline", "DeviceConfiguration", "OSUpdateCompliance"],
+      "evidence": "Security baseline deployment, device configuration profiles, Windows Update rings, patch compliance"
+    },
+    "IR.LM.1": {
+      "title": "License Management and Cost Control",
+      "checks": ["License", "LicenseWaste"],
+      "evidence": "Unused license count and cost waste, duplicate license assignments, trial subscriptions at risk of expiry"
+    },
+    "IR.GV.1": {
+      "title": "Governance and Oversight",
+      "checks": ["MailboxAuditing", "Applications", "AttackSimulation"],
+      "evidence": "Mailbox audit configuration, application permission hygiene, attack simulation training recency, security awareness"
+    }
+  },
+  "coverage_calculation": "Number of controls with at least one passing check / total mapped controls × 100",
+  "scoring": {
+    "method": "Controls passing / total controls × 100",
+    "pass_threshold": 70,
+    "note": "Internal risk threshold is set at 70% — organisations below this score should prioritise a formal remediation programme"
+  }
+}

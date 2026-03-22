@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -Command \":*)",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Test-ImportChain.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-CoreLoad.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-CoreLoad2.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-CoreLoad3.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-AllMods.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-ModuleNesting.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Fix-ModuleForce.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Test-DryRun.ps1\")"
+    ]
+  }
+}

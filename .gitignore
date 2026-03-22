@@ -1,0 +1,34 @@
+# ─── Output artifacts ──────────────────────────────────────────────────────
+TiTC-Snapshot-*/
+MSP-AuditPack-*/
+*.log
+audit-trail.json
+
+# ─── Sensitive / credential files ─────────────────────────────────────────
+*.secret
+*.key
+appsettings.local.json
+config.local.json
+.env
+*.pfx
+*.p12
+
+# ─── IDE / editor ──────────────────────────────────────────────────────────
+.vscode/
+*.code-workspace
+.idea/
+*.suo
+*.user
+
+# ─── PowerShell ────────────────────────────────────────────────────────────
+PSModulePath/
+*.psgallery
+
+# ─── Test output ───────────────────────────────────────────────────────────
+TestResults/
+*.xml
+
+# ─── Temp / OS ─────────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+desktop.ini

@@ -1,0 +1,27 @@
+# Assessment output artifacts
+TiTC-Snapshot-*/
+MSP-AuditPack-*/
+tests/dry-run-output/
+
+# Logs
+logs/
+*.log
+
+# Sensitive / credentials
+*.secret
+appsettings.local.json
+.env
+
+# IDE
+.vscode/settings.json
+*.code-workspace
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Input data (may contain client data)
+input/auditxpert/*.json
+input/third-party/*
+input/manual/*.csv
+!input/*/README.txt

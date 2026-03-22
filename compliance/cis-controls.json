@@ -1,0 +1,123 @@
+{
+  "framework": "CIS Microsoft 365 Foundations Benchmark",
+  "version": "v3.1",
+  "description": "CIS Microsoft 365 Foundations Benchmark controls mapped to AuditXpert assessment checks. Covers identity, email, device, and app security controls for M365 environments.",
+  "controls": {
+    "1.1.1": {
+      "title": "Ensure multi-factor authentication is enabled for all users",
+      "checks": ["MFA"],
+      "evidence": "MFA enrollment percentage across all licensed users, users without any MFA method registered"
+    },
+    "1.1.4": {
+      "title": "Ensure the number of Global Administrators is less than 5",
+      "checks": ["PrivilegedAccess"],
+      "evidence": "Count of active Global Administrator role assignments, permanent vs. PIM-eligible assignments"
+    },
+    "1.1.5": {
+      "title": "Ensure Privileged Identity Management is used to manage just-in-time access",
+      "checks": ["PrivilegedAccess"],
+      "evidence": "PIM eligibility ratio, standing vs. eligible role assignments, privileged role activation logs"
+    },
+    "1.1.6": {
+      "title": "Ensure legacy authentication is blocked",
+      "checks": ["ConditionalAccess"],
+      "evidence": "Conditional Access policy blocking legacy authentication protocols (Exchange ActiveSync legacy, POP3, IMAP, SMTP Auth)"
+    },
+    "1.1.9": {
+      "title": "Ensure Microsoft Authenticator number matching is enabled",
+      "checks": ["AuthMethods"],
+      "evidence": "Authentication Methods policy — number matching configuration status for Microsoft Authenticator"
+    },
+    "1.2.1": {
+      "title": "Ensure Conditional Access policies are configured",
+      "checks": ["ConditionalAccess"],
+      "evidence": "Number of active CA policies, policy coverage across users/applications, broad exclusions"
+    },
+    "1.2.2": {
+      "title": "Ensure legacy authentication is blocked via Conditional Access",
+      "checks": ["ConditionalAccess"],
+      "evidence": "CA policy with client app condition targeting legacy authentication clients in block mode"
+    },
+    "1.2.6": {
+      "title": "Ensure sign-in risk policy is configured",
+      "checks": ["SignInRisk"],
+      "evidence": "Identity Protection sign-in risk policy configuration, risk levels covered, enforcement action (block/MFA)"
+    },
+    "1.2.7": {
+      "title": "Ensure user risk policy is configured",
+      "checks": ["SignInRisk"],
+      "evidence": "Identity Protection user risk policy configuration, risk levels covered, enforcement action (block/password change)"
+    },
+    "1.3.1": {
+      "title": "Ensure application credentials are rotated regularly",
+      "checks": ["Applications"],
+      "evidence": "Application secrets/certificates approaching or past expiry, long-lived credentials (>1 year), expired credentials"
+    },
+    "2.1.1": {
+      "title": "Ensure that external mail forwarding is blocked",
+      "checks": ["ExternalForwarding"],
+      "evidence": "Inbox rules forwarding to external addresses, transport rules with external redirect actions"
+    },
+    "2.2.1": {
+      "title": "Ensure anti-spam policies are configured",
+      "checks": ["TransportRules"],
+      "evidence": "Transport rules bypassing spam filtering (SCL -1), external anti-spam bypass rules"
+    },
+    "2.3.1": {
+      "title": "Ensure anti-phishing policies are configured",
+      "checks": ["AntiPhishing"],
+      "evidence": "Anti-phishing policy configuration, spoof intelligence settings, first contact safety tips"
+    },
+    "2.3.2": {
+      "title": "Ensure impersonation protection is enabled",
+      "checks": ["AntiPhishing"],
+      "evidence": "User and domain impersonation protection settings, mailbox intelligence configuration"
+    },
+    "2.4.1": {
+      "title": "Ensure Safe Links policies are configured",
+      "checks": ["AntiPhishing"],
+      "evidence": "Defender for Office 365 Safe Links policy existence and configuration, URL scanning on click"
+    },
+    "2.4.2": {
+      "title": "Ensure Safe Attachments policies are configured",
+      "checks": ["AntiPhishing"],
+      "evidence": "Defender for Office 365 Safe Attachments policy existence, action on malware detection"
+    },
+    "2.5.1": {
+      "title": "Ensure sign-in to shared mailboxes is blocked",
+      "checks": ["SharedMailboxes"],
+      "evidence": "Shared mailboxes with accountEnabled=true (direct sign-in enabled)"
+    },
+    "2.6.1": {
+      "title": "Ensure DMARC records are configured for all domains",
+      "checks": ["DomainSecurity"],
+      "evidence": "DMARC DNS record presence per domain, policy enforcement level (none/quarantine/reject)"
+    },
+    "3.1.1": {
+      "title": "Ensure device compliance policies are configured and enforced",
+      "checks": ["DeviceCompliance", "CompliancePolicies"],
+      "evidence": "Device compliance percentage, compliance policies per platform (Windows/iOS/Android/macOS), policy assignments"
+    },
+    "3.4.1": {
+      "title": "Ensure BitLocker (or equivalent) disk encryption is enabled",
+      "checks": ["EncryptionStatus"],
+      "evidence": "Device isEncrypted field per managed device, unencrypted device count by OS type"
+    },
+    "3.5.1": {
+      "title": "Ensure Windows Update for Business is configured",
+      "checks": ["OSUpdateCompliance"],
+      "evidence": "Windows Update for Business ring configuration, outdated OS version count, patch compliance"
+    },
+    "4.1.1": {
+      "title": "Ensure Microsoft Defender for Endpoint is configured and onboarded",
+      "checks": ["DefenderForEndpoint"],
+      "evidence": "Defender for Endpoint device onboarding coverage, sensor health, management agent types"
+    }
+  },
+  "coverage_calculation": "Number of controls with at least one passing check / total mapped controls × 100",
+  "scoring": {
+    "method": "Weighted score based on control criticality",
+    "pass_threshold": 80,
+    "note": "Controls 1.1.1 (MFA), 1.1.4 (Global Admins), 2.1.1 (Forwarding), 2.6.1 (DMARC) are commonly flagged in CIS assessments"
+  }
+}
