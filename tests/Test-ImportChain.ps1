@@ -107,7 +107,7 @@ Test-Step 'Import TiTC.Output.AIExplainer' {
 $coreFns = @(
     'Connect-TiTCGraph','Disconnect-TiTCGraph','Invoke-TiTCGraphRequest',
     'Initialize-TiTCLogging','Write-TiTCLog','Export-TiTCLog',
-    'Get-TiTCConfig','New-TiTCFinding','New-TiTCCollectorResult',
+    'Get-TiTCConfig','New-TiTCFinding','New-TiTCCollectorResult','New-TiTCAssessmentReport',
     'Invoke-TiTCLogRotation','Write-TiTCAssessmentSummary',
     'Get-TiTCErrorSummary','Test-TiTCPrerequisites',
     'Measure-TiTCOperation','Get-TiTCApiCallSummary'
@@ -173,6 +173,14 @@ Test-Step 'Factory: New-TiTCCollectorResult creates valid result' {
     $r = New-TiTCCollectorResult -Domain 'EntraID'
     if ($null -eq $r)             { throw 'New-TiTCCollectorResult returned null' }
     if ($r.Domain -ne 'EntraID') { throw "Domain mismatch: $($r.Domain)" }
+}
+
+# ── Factory: New-TiTCAssessmentReport ────────────────────────────────────────
+Test-Step 'Factory: New-TiTCAssessmentReport creates valid report' {
+    $r = New-TiTCAssessmentReport
+    if ($null -eq $r)               { throw 'New-TiTCAssessmentReport returned null' }
+    if (-not $r.ReportId)           { throw 'ReportId not set' }
+    if ($null -eq $r.RiskScore)     { throw 'RiskScore not initialized' }
 }
 
 # ── GetRating boundary check ──────────────────────────────────────────────────

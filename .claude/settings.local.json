@@ -9,7 +9,13 @@
       "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-AllMods.ps1\")",
       "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Diag-ModuleNesting.ps1\")",
       "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Fix-ModuleForce.ps1\")",
-      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Test-DryRun.ps1\")"
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Test-DryRun.ps1\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -Command \"& ''c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\profiles\\\\Invoke-M365Snapshot.ps1'' -TenantId ''test-dryrun'' -SkipBanner 2>&1 | Select-Object -First 25\")",
+      "Bash(pwsh -ExecutionPolicy Bypass -NoProfile -File \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\tests\\\\Fix-TypeRefs.ps1\")",
+      "Bash(grep -n \"param\\\\|Top\\\\|$top\\\\|AllPages\" \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\src\\\\Core\\\\TiTC.Core.psm1\")",
+      "Bash(pwsh -NoProfile -Command \":*)",
+      "Bash(grep -n \"^function Test-TiTCPrivilegedAccess\\\\|^function Test-TiTCCompliancePolicies\\\\|^function Test-TiTCOSUpdateCompliance\" /c/Scripts/Assessment/AuditXpert/src/Collectors/TiTC.Collector.*.psm1)",
+      "Bash(pwsh -ExecutionPolicy Bypass -Command \":*)"
     ]
   }
 }

@@ -78,7 +78,7 @@ function Invoke-TiTCExchangeCollector {
         connector config, anti-phishing policies). Requires ExchangeOnlineManagement.
     #>
     [CmdletBinding()]
-    [OutputType([TiTCCollectorResult])]
+    [OutputType([PSObject])]
     param(
         [hashtable]$Config = @{},
 
@@ -135,7 +135,7 @@ function Invoke-TiTCExchangeCollector {
                 $result.Errors += $errorMsg
 
                 if ($result.Status -eq 'Success') {
-                    $result.Status = [TiTCCollectorStatus]::PartialSuccess
+                    $result.Status = 'PartialSuccess'
                 }
             }
         }
@@ -191,7 +191,7 @@ function Test-TiTCExternalForwarding {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for external mail forwarding..." -Level Info -Component $script:COMPONENT
@@ -211,6 +211,7 @@ function Test-TiTCExternalForwarding {
     $suspiciousRules = [System.Collections.ArrayList]::new()
 
     foreach ($user in $users) {
+        if (-not $user.id) { continue }
         try {
             # Check mailbox forwarding via mailbox settings
             $mailboxSettings = Invoke-TiTCGraphRequest `
@@ -339,30 +340,17 @@ function Test-TiTCTransportRules {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result,
+        $Result,
         [bool]$ExoConnected
     )
 
     Write-TiTCLog "Checking transport rules..." -Level Info -Component $script:COMPONENT
 
     if (-not $ExoConnected) {
-        # Use Graph API to get basic transport rule info
-        try {
-            $transportRules = (Invoke-TiTCGraphRequest `
-                -Endpoint '/admin/exchange/transportRules' `
-                -Beta `
-                -AllPages `
-                -Component $script:COMPONENT
-            ).value
-        }
-        catch {
-            Write-TiTCLog "Transport rules not accessible via Graph. Use -UseExchangeModule for full check." -Level Warning -Component $script:COMPONENT
-            $Result.Warnings += "Transport rule analysis requires ExchangeOnlineManagement module for full coverage."
-
-            # Fallback: check organization config for auto-forwarding
-            Test-TiTCAutoForwardingPolicy -Config $Config -Result $Result
-            return
-        }
+        Write-TiTCLog "Transport rules require ExchangeOnlineManagement. Skipping unsupported Graph fallback." -Level Warning -Component $script:COMPONENT
+        $Result.Warnings += "Transport rule analysis requires ExchangeOnlineManagement module for full coverage."
+        Test-TiTCAutoForwardingPolicy -Config $Config -Result $Result
+        return
     }
     else {
         # Use Exchange Online module for full transport rule analysis
@@ -484,7 +472,7 @@ function Test-TiTCAutoForwardingPolicy {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     # Check if remote domains allow auto-forwarding
@@ -529,43 +517,15 @@ function Test-TiTCAntiPhishingPolicies {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result,
+        $Result,
         [bool]$ExoConnected
     )
 
     Write-TiTCLog "Checking anti-phishing configuration..." -Level Info -Component $script:COMPONENT
 
     if (-not $ExoConnected) {
-        Write-TiTCLog "Anti-phishing deep check requires ExchangeOnlineManagement. Using basic Graph checks." -Level Warning -Component $script:COMPONENT
-
-        # Check Defender for Office 365 policies via Graph Security API
-        try {
-            $securityPolicies = (Invoke-TiTCGraphRequest `
-                -Endpoint '/security/threatPolicies' `
-                -Beta `
-                -Component $script:COMPONENT
-            ).value
-
-            # Basic policy existence check
-            if (-not $securityPolicies -or $securityPolicies.Count -eq 0) {
-                $Result.Findings += New-TiTCFinding `
-                    -Title "No custom anti-phishing policies detected" `
-                    -Description "No custom anti-phishing policies found beyond the default. The default policy provides basic protection but lacks impersonation protection, mailbox intelligence, and safety tips customization." `
-                    -Severity Medium `
-                    -Domain Exchange `
-                    -RiskWeight 6 `
-                    -Remediation "Create a custom anti-phishing policy with: impersonation protection for executives and partners, mailbox intelligence enabled, spoof intelligence action set to quarantine, safety tips enabled." `
-                    -RemediationUrl 'https://learn.microsoft.com/microsoft-365/security/office-365-security/anti-phishing-policies-about' `
-                    -ComplianceControls @('ISO27001:A.8.23', 'CIS:2.3.1', 'SOC2:CC6.6', 'NIST:SI-8') `
-                    -DetectedBy $script:COMPONENT `
-                    -Tags @('AntiPhishing', 'DefenderForOffice365', 'EmailSecurity')
-            }
-        }
-        catch {
-            Write-TiTCLog "Threat policies endpoint not available: $_" -Level Debug -Component $script:COMPONENT
-            $Result.Warnings += "Anti-phishing policy check requires Defender for Office 365 or ExchangeOnlineManagement module."
-        }
-
+        Write-TiTCLog "Anti-phishing deep check requires ExchangeOnlineManagement. Skipping unsupported Graph fallback." -Level Warning -Component $script:COMPONENT
+        $Result.Warnings += "Anti-phishing policy check requires ExchangeOnlineManagement module for full coverage."
         return
     }
 
@@ -683,7 +643,7 @@ function Test-TiTCMailboxAuditing {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking mailbox audit configuration..." -Level Info -Component $script:COMPONENT
@@ -724,7 +684,7 @@ function Test-TiTCSharedMailboxSecurity {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking shared mailbox security..." -Level Info -Component $script:COMPONENT
@@ -813,7 +773,7 @@ function Test-TiTCDomainEmailSecurity {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking domain email authentication (DMARC/SPF)..." -Level Info -Component $script:COMPONENT
@@ -910,7 +870,7 @@ function Test-TiTCOWAPolicy {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result,
+        $Result,
         [bool]$ExoConnected
     )
 
@@ -951,7 +911,7 @@ function Test-TiTCMailConnectors {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result,
+        $Result,
         [bool]$ExoConnected
     )
 
@@ -1004,7 +964,7 @@ function Test-TiTCMailEnabledGroups {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking mail-enabled groups exposure..." -Level Info -Component $script:COMPONENT
@@ -1013,7 +973,7 @@ function Test-TiTCMailEnabledGroups {
     try {
         $groups = (Invoke-TiTCGraphRequest `
             -Endpoint '/groups' `
-            -Select 'id,displayName,mailEnabled,securityEnabled,mail,groupTypes,allowExternalSenders' `
+            -Select 'id,displayName,mailEnabled,securityEnabled,mail,groupTypes' `
             -Filter "mailEnabled eq true" `
             -AllPages `
             -Component $script:COMPONENT
@@ -1021,19 +981,19 @@ function Test-TiTCMailEnabledGroups {
 
         $Result.ObjectsScanned += $groups.Count
 
-        # Security groups that are also mail-enabled and accept external mail
+        # Graph does not expose AllowExternalSenders reliably here, so flag mail-enabled security groups for review.
         $externalSecGroups = $groups | Where-Object {
-            $_.securityEnabled -eq $true -and $_.allowExternalSenders -eq $true
+            $_.securityEnabled -eq $true
         }
 
         if ($externalSecGroups.Count -gt 0) {
             $Result.Findings += New-TiTCFinding `
-                -Title "Mail-enabled security groups accepting external email" `
-                -Description "$($externalSecGroups.Count) security groups are mail-enabled and accept email from external senders. This can be exploited for targeted phishing — a single email reaches all group members." `
-                -Severity Medium `
+                -Title "Mail-enabled security groups should be reviewed for external sender exposure" `
+                -Description "$($externalSecGroups.Count) security groups are mail-enabled. Review these groups in Exchange Online to confirm whether external senders are allowed, because one inbound email can reach all members if external delivery is enabled." `
+                -Severity Low `
                 -Domain Exchange `
                 -RiskWeight 4 `
-                -Remediation "Restrict external sender access on security groups. Set AllowExternalSenders to false unless there is a documented business requirement for external mail delivery to the group." `
+                -Remediation "Review each mail-enabled security group in Exchange Online and disable external sender access unless there is a documented business requirement." `
                 -ComplianceControls @('ISO27001:A.8.23', 'NIST:SC-7') `
                 -AffectedResources ($externalSecGroups | ForEach-Object { "$($_.displayName) ($($_.mail))" } | Select-Object -First 20) `
                 -Evidence @{ ExternalSecGroups = $externalSecGroups.Count } `

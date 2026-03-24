@@ -65,7 +65,7 @@ function Invoke-TiTCDefenderCollector {
         Specific checks to run. Default runs all checks.
     #>
     [CmdletBinding()]
-    [OutputType([TiTCCollectorResult])]
+    [OutputType([PSObject])]
     param(
         [hashtable]$Config = @{},
 
@@ -109,7 +109,7 @@ function Invoke-TiTCDefenderCollector {
                 $result.Errors += $errorMsg
 
                 if ($result.Status -eq 'Success') {
-                    $result.Status = [TiTCCollectorStatus]::PartialSuccess
+                    $result.Status = 'PartialSuccess'
                 }
             }
         }
@@ -131,7 +131,7 @@ function Test-TiTCSecureScore {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking Microsoft Secure Score..." -Level Info -Component $script:COMPONENT
@@ -218,7 +218,7 @@ function Test-TiTCSecurityAlerts {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking open security alerts..." -Level Info -Component $script:COMPONENT
@@ -322,7 +322,7 @@ function Test-TiTCIncidents {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking active security incidents..." -Level Info -Component $script:COMPONENT
@@ -390,7 +390,7 @@ function Test-TiTCDefenderForEndpointCoverage {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking Defender for Endpoint device onboarding coverage..." -Level Info -Component $script:COMPONENT
@@ -484,7 +484,7 @@ function Test-TiTCEmailThreatPolicies {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking email threat protection policy configuration..." -Level Info -Component $script:COMPONENT
@@ -571,7 +571,7 @@ function Test-TiTCAttackSimulation {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking attack simulation training activity..." -Level Info -Component $script:COMPONENT
@@ -636,7 +636,7 @@ function Test-TiTCAutoInvestigation {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking Automated Investigation and Response (AIR) configuration..." -Level Info -Component $script:COMPONENT

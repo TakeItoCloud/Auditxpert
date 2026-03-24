@@ -189,7 +189,7 @@ $connectionResult = Connect-TiTCGraph @connectParams
 # INITIALIZE REPORT
 # ============================================================================
 
-$report = [TiTCAssessmentReport]::new()
+$report = New-TiTCAssessmentReport
 $report.TenantId          = $connectionResult.TenantId
 $report.TenantName        = $connectionResult.TenantName
 $report.TenantDomain      = $connectionResult.Domain

@@ -74,7 +74,7 @@ function Invoke-TiTCIntuneCollector {
         Specific checks to run. Default runs all checks.
     #>
     [CmdletBinding()]
-    [OutputType([TiTCCollectorResult])]
+    [OutputType([PSObject])]
     param(
         [hashtable]$Config = @{},
 
@@ -120,7 +120,7 @@ function Invoke-TiTCIntuneCollector {
                 $result.Errors += $errorMsg
 
                 if ($result.Status -eq 'Success') {
-                    $result.Status = [TiTCCollectorStatus]::PartialSuccess
+                    $result.Status = 'PartialSuccess'
                 }
             }
         }
@@ -142,7 +142,7 @@ function Test-TiTCDeviceCompliance {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking device compliance status..." -Level Info -Component $script:COMPONENT
@@ -166,7 +166,6 @@ function Test-TiTCDeviceCompliance {
     # Get compliance policies for context
     $compliancePolicies = (Invoke-TiTCGraphRequest `
         -Endpoint '/deviceManagement/deviceCompliancePolicies' `
-        -Select 'id,displayName,@odata.type' `
         -AllPages `
         -Component $script:COMPONENT
     ).value
@@ -248,15 +247,14 @@ function Test-TiTCCompliancePolicies {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking compliance policy coverage..." -Level Info -Component $script:COMPONENT
 
-    # Get policies with assignments
+    # Get policies — no $select so @odata.type is included for platform coverage detection
     $policies = (Invoke-TiTCGraphRequest `
         -Endpoint '/deviceManagement/deviceCompliancePolicies' `
-        -Select 'id,displayName,@odata.type,scheduledActionsForRule' `
         -AllPages `
         -Component $script:COMPONENT
     ).value
@@ -364,7 +362,7 @@ function Test-TiTCEncryptionStatus {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking device encryption status..." -Level Info -Component $script:COMPONENT
@@ -443,7 +441,7 @@ function Test-TiTCOSUpdateCompliance {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking OS update compliance and patch management..." -Level Info -Component $script:COMPONENT
@@ -460,16 +458,16 @@ function Test-TiTCOSUpdateCompliance {
         ).value
     }
 
-    # Get Windows Update for Business rings
+    # Get Windows Update for Business rings (filter client-side — @odata.type not supported in $filter)
     $updateRings = @()
     try {
-        $updateRings = (Invoke-TiTCGraphRequest `
+        $allConfigs = (Invoke-TiTCGraphRequest `
             -Endpoint '/deviceManagement/deviceConfigurations' `
-            -Select 'id,displayName,@odata.type' `
-            -Filter "@odata.type eq '#microsoft.graph.windowsUpdateForBusinessConfiguration'" `
+            -Select 'id,displayName' `
             -AllPages `
             -Component $script:COMPONENT
         ).value
+        $updateRings = @($allConfigs | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.windowsUpdateForBusinessConfiguration' })
     }
     catch {
         Write-TiTCLog "Could not retrieve Windows Update rings: $_" -Level Debug -Component $script:COMPONENT
@@ -561,7 +559,7 @@ function Test-TiTCStaleDevices {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for stale/unsynced devices..." -Level Info -Component $script:COMPONENT
@@ -636,7 +634,7 @@ function Test-TiTCAppProtection {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking App Protection (MAM) policy coverage..." -Level Info -Component $script:COMPONENT
@@ -645,7 +643,7 @@ function Test-TiTCAppProtection {
     try {
         $mamPolicies = (Invoke-TiTCGraphRequest `
             -Endpoint '/deviceAppManagement/managedAppPolicies' `
-            -Select 'id,displayName,@odata.type,isAssigned' `
+            -Select 'id,displayName' `
             -AllPages `
             -Component $script:COMPONENT
         ).value
@@ -738,7 +736,7 @@ function Test-TiTCSecurityBaselines {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking security baseline deployment..." -Level Info -Component $script:COMPONENT
@@ -781,7 +779,7 @@ function Test-TiTCSecurityBaselines {
         try {
             $configs = (Invoke-TiTCGraphRequest `
                 -Endpoint '/deviceManagement/deviceConfigurations' `
-                -Select 'id,displayName,@odata.type' `
+                -Select 'id,displayName' `
                 -AllPages `
                 -Component $script:COMPONENT
             ).value
@@ -852,7 +850,7 @@ function Test-TiTCDeviceConfigProfiles {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking critical device configuration profiles..." -Level Info -Component $script:COMPONENT
@@ -861,7 +859,7 @@ function Test-TiTCDeviceConfigProfiles {
     try {
         $configProfiles = (Invoke-TiTCGraphRequest `
             -Endpoint '/deviceManagement/deviceConfigurations' `
-            -Select 'id,displayName,@odata.type,lastModifiedDateTime' `
+            -Select 'id,displayName,lastModifiedDateTime' `
             -AllPages `
             -Component $script:COMPONENT
         ).value

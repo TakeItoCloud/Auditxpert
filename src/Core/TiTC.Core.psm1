@@ -241,13 +241,18 @@ function Connect-TiTCGraph {
                         'DeviceManagementConfiguration.Read.All',
                         'DeviceManagementManagedDevices.Read.All',
                         'MailboxSettings.Read',
+                        'Mail.Read',
                         'Organization.Read.All',
                         'Reports.Read.All',
                         'RoleManagement.Read.Directory',
                         'User.Read.All',
                         'Group.Read.All',
                         'Application.Read.All',
-                        'AuditLog.Read.All'
+                        'AuditLog.Read.All',
+                        'IdentityRiskEvent.Read.All',
+                        'IdentityRiskyUser.Read.All',
+                        'SecurityAlert.Read.All',
+                        'SecurityIncident.Read.All'
                     )
                     $script:TiTCState.AuthMethod = 'Interactive'
                     Write-TiTCLog "Using interactive browser authentication" -Level Info -Component 'Auth'
@@ -403,7 +408,8 @@ function Invoke-TiTCGraphRequest {
         [string]$Select,
         [string]$Filter,
         [string]$Expand,
-        [int]$Top = 999,
+        [int]$Top = 0,      # 0 = don't add $top (use for singleton endpoints)
+        [switch]$NoTop,     # kept for backward compat; $Top=0 default already suppresses $top
 
         [switch]$Beta,
         [switch]$AllPages,
@@ -426,7 +432,11 @@ function Invoke-TiTCGraphRequest {
         if ($Select) { $queryParams += "`$select=$Select" }
         if ($Filter) { $queryParams += "`$filter=$Filter" }
         if ($Expand) { $queryParams += "`$expand=$Expand" }
-        if ($Top -and $Method -eq 'GET') { $queryParams += "`$top=$Top" }
+        # Add $top only when explicitly requested or when paginating (-AllPages)
+        if ($Method -eq 'GET') {
+            $effectiveTop = if ($Top -gt 0) { $Top } elseif ($AllPages) { 999 } else { 0 }
+            if ($effectiveTop -gt 0) { $queryParams += "`$top=$effectiveTop" }
+        }
 
         $uri = "$baseUrl$Endpoint"
         if ($queryParams.Count -gt 0) {
@@ -434,6 +444,7 @@ function Invoke-TiTCGraphRequest {
         }
 
         $allResults = [System.Collections.ArrayList]::new()
+        $singleObjectResponse = $null
         $currentUri = $uri
         $pageCount = 0
         $callStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -463,12 +474,15 @@ function Invoke-TiTCGraphRequest {
                     $pageCount++
 
                     # Collect results
-                    if ($response.value) {
+                    if ($null -ne $response.PSObject.Properties['value']) {
                         $null = $allResults.AddRange($response.value)
                     }
-                    elseif ($response -is [hashtable] -and -not $response.ContainsKey('value')) {
+                    elseif ($null -ne $response) {
                         # Single object response
                         $null = $allResults.Add($response)
+                        if (-not $singleObjectResponse) {
+                            $singleObjectResponse = $response
+                        }
                     }
 
                     # Handle pagination
@@ -532,12 +546,22 @@ function Invoke-TiTCGraphRequest {
 
         Write-TiTCLog "Completed: $Endpoint ($($allResults.Count) results, $pageCount pages, $($callStopwatch.ElapsedMilliseconds)ms)" -Level Debug -Component $Component
 
-        return @{
+        $result = [ordered]@{
             value     = $allResults.ToArray()
             count     = $allResults.Count
             pages     = $pageCount
             endpoint  = $Endpoint
         }
+
+        if ($singleObjectResponse) {
+            foreach ($prop in $singleObjectResponse.PSObject.Properties) {
+                if (-not $result.Contains($prop.Name)) {
+                    $result[$prop.Name] = $prop.Value
+                }
+            }
+        }
+
+        return $result
     }
 }
 
@@ -1216,6 +1240,9 @@ Export-ModuleMember -Function @(
     # Factories (re-exported from nested TiTC.Models)
     'New-TiTCFinding'
     'New-TiTCCollectorResult'
+    'New-TiTCAssessmentReport'
+    'New-TiTCRiskScore'
+    'New-TiTCLicenseWaste'
 
     # Utilities
     'Get-TiTCState'

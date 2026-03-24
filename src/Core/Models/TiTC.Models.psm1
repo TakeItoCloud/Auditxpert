@@ -412,6 +412,27 @@ function New-TiTCCollectorResult {
     return $result
 }
 
+function New-TiTCAssessmentReport {
+    [CmdletBinding()]
+    [OutputType([TiTCAssessmentReport])]
+    param()
+    return [TiTCAssessmentReport]::new()
+}
+
+function New-TiTCRiskScore {
+    [CmdletBinding()]
+    [OutputType([TiTCRiskScore])]
+    param()
+    return [TiTCRiskScore]::new()
+}
+
+function New-TiTCLicenseWaste {
+    [CmdletBinding()]
+    [OutputType([TiTCLicenseWaste])]
+    param()
+    return [TiTCLicenseWaste]::new()
+}
+
 # ============================================================================
 # EXPORTS
 # ============================================================================
@@ -419,4 +440,7 @@ function New-TiTCCollectorResult {
 Export-ModuleMember -Function @(
     'New-TiTCFinding'
     'New-TiTCCollectorResult'
+    'New-TiTCAssessmentReport'
+    'New-TiTCRiskScore'
+    'New-TiTCLicenseWaste'
 )

@@ -1,0 +1,6 @@
+# Never commit certificates or private keys
+*.pfx
+*.cer
+*.pem
+*-config.json
+!.gitignore

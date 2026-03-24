@@ -202,7 +202,7 @@ $connectionResult = Connect-TiTCGraph @connectParams
 # INITIALIZE REPORT
 # ============================================================================
 
-$report = [TiTCAssessmentReport]::new()
+$report = New-TiTCAssessmentReport
 $report.TenantId = $connectionResult.TenantId
 $report.TenantName = $connectionResult.TenantName
 $report.TenantDomain = $connectionResult.Domain
@@ -380,7 +380,7 @@ if ($OutputFormat -in @('HTML', 'PDF', 'All')) {
             -AssessmentData $assessmentData `
             -OutputPath $reportBasePath `
             -Format $reportFormat `
-            -CompanyName ($config.Output.BrandingCompanyName ?? 'TakeItToCloud') `
+            -CompanyName (if ($config.Output.BrandingCompanyName) { $config.Output.BrandingCompanyName } else { 'TakeItToCloud' }) `
             -LogoPath $BrandingLogo
 
         Write-TiTCLog "Report generated: $reportFile" -Level Success -Component 'Snapshot'

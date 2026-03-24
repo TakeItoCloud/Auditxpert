@@ -251,7 +251,11 @@ function Build-TiTCReportHTML {
     foreach ($cat in $catOrder) {
         $rawCat = if ($catScores[$cat]) { $catScores[$cat] } else { 0 }
         # CategoryScores values may be [ordered]@{Score=...; Rating=...} dicts
-        $score = if ($rawCat -is [System.Collections.IDictionary]) { [double]($rawCat['Score'] ?? 0) } else { [double]$rawCat }
+        $score = if ($rawCat -is [System.Collections.IDictionary]) {
+            if ($null -ne $rawCat['Score']) { [double]$rawCat['Score'] } else { 0 }
+        } else {
+            [double]$rawCat
+        }
         $barColor = if ($score -gt 60) { $Colors.danger } elseif ($score -gt 30) { $Colors.warning } else { $Colors.accent }
         $categoryBars += @"
 <div class="cat-row">
@@ -292,12 +296,14 @@ function Build-TiTCReportHTML {
             $affectedHtml = ''
             if ($f.AffectedResources -and $f.AffectedResources.Count -gt 0) {
                 $shown = $f.AffectedResources | Select-Object -First 10
+                $moreHtml = if ($f.AffectedResources.Count -gt 10) { "<li><em>... and $($f.AffectedResources.Count - 10) more</em></li>" } else { '' }
                 $affectedHtml = "<div class='affected-list'><strong>Affected ($($f.AffectedResources.Count)):</strong><ul>" +
                     ($shown | ForEach-Object { "<li>$_</li>" } | Out-String) +
-                    (if ($f.AffectedResources.Count -gt 10) { "<li><em>... and $($f.AffectedResources.Count - 10) more</em></li>" } else { '' }) +
+                    $moreHtml +
                     "</ul></div>"
             }
             $controls = if ($f.ComplianceControls) { $f.ComplianceControls -join ' &bull; ' } else { '' }
+            $controlsHtml = if ($controls) { "<div class='controls'><strong>Controls:</strong> $controls</div>" } else { '' }
             $findingsDetail += @"
 <div class='finding-card'>
   <div class='finding-header'>
@@ -308,7 +314,7 @@ function Build-TiTCReportHTML {
   <p class='finding-desc'>$($f.Description)</p>
   $affectedHtml
   <div class='remediation'><strong>Remediation:</strong> $($f.Remediation)</div>
-  $(if ($controls) { "<div class='controls'><strong>Controls:</strong> $controls</div>" } else { '' })
+  $controlsHtml
 </div>
 "@
         }
@@ -375,6 +381,61 @@ function Build-TiTCReportHTML {
     <div class="waste-label">estimated monthly waste</div>
   </div>
   <p>Unused license assignments were detected. Review the Licensing collector findings for detailed breakdown and remediation steps.</p>
+</section>
+"@
+    }
+
+    $severitySectionHtml = "<p style='color:#64748B'>No findings detected.</p>"
+    if ($totalFindings -gt 0) {
+        $critPct = [Math]::Round(($critCount / $totalFindings) * 100)
+        $highPct = [Math]::Round(($highCount / $totalFindings) * 100)
+        $medPct  = [Math]::Round(($medCount  / $totalFindings) * 100)
+        $lowPct  = [Math]::Round(($lowCount  / $totalFindings) * 100)
+        $infoPct = [Math]::Max(0, 100 - $critPct - $highPct - $medPct - $lowPct)
+
+        $distSegments = @()
+        $critLabel = if ($critPct -gt 5) { "$critCount" } else { '' }
+        $highLabel = if ($highPct -gt 5) { "$highCount" } else { '' }
+        $medLabel  = if ($medPct  -gt 5) { "$medCount"  } else { '' }
+        $lowLabel  = if ($lowPct  -gt 5) { "$lowCount"  } else { '' }
+        $infoLabel = if ($infoPct -gt 5) { "$infoCount" } else { '' }
+        if ($critPct -gt 0) { $distSegments += "<div class='dist-seg' style='width:$critPct%;background:#DC2626;'>$critLabel</div>" }
+        if ($highPct -gt 0) { $distSegments += "<div class='dist-seg' style='width:$highPct%;background:#EA580C;'>$highLabel</div>" }
+        if ($medPct  -gt 0) { $distSegments += "<div class='dist-seg' style='width:$medPct%;background:#D97706;'>$medLabel</div>" }
+        if ($lowPct  -gt 0) { $distSegments += "<div class='dist-seg' style='width:$lowPct%;background:#2563EB;'>$lowLabel</div>" }
+        if ($infoPct -gt 0 -and $infoCount -gt 0) { $distSegments += "<div class='dist-seg' style='width:$infoPct%;background:#6B7280;'>$infoLabel</div>" }
+
+        $severitySectionHtml = @"
+<div class="dist-bar">
+  $($distSegments -join "`n  ")
+</div>
+<div class="dist-legend">
+  <div class="dist-legend-item"><div class="legend-dot" style="background:#DC2626"></div>Critical ($critCount)</div>
+  <div class="dist-legend-item"><div class="legend-dot" style="background:#EA580C"></div>High ($highCount)</div>
+  <div class="dist-legend-item"><div class="legend-dot" style="background:#D97706"></div>Medium ($medCount)</div>
+  <div class="dist-legend-item"><div class="legend-dot" style="background:#2563EB"></div>Low ($lowCount)</div>
+  <div class="dist-legend-item"><div class="legend-dot" style="background:#6B7280"></div>Info ($infoCount)</div>
+</div>
+"@
+    }
+
+    $quickWinsSectionHtml = ''
+    if ($quickWins.Count -gt 0) {
+        $quickWinsSectionHtml = @"
+<section class='section'>
+  <h2 class='section-title'>&#9889; Quick Wins</h2>
+  <p style='color:#64748B;margin-bottom:20px;'>These findings can be resolved quickly with minimal effort and no significant disruption.</p>
+  <div class='qw-grid'>$quickWinCards</div>
+</section>
+"@
+    }
+
+    $complianceSectionHtml = ''
+    if ($compGaps.Keys.Count -gt 0) {
+        $complianceSectionHtml = @"
+<section class='section page-break'>
+  <h2 class='section-title'>Compliance Posture</h2>
+  $complianceHtml
 </section>
 "@
     }
@@ -559,29 +620,7 @@ function Build-TiTCReportHTML {
 <!-- SEVERITY DISTRIBUTION -->
 <section class="section">
   <h2 class="section-title">Severity Distribution</h2>
-  $(if ($totalFindings -gt 0) {
-    $critPct = [Math]::Round(($critCount / $totalFindings) * 100)
-    $highPct = [Math]::Round(($highCount / $totalFindings) * 100)
-    $medPct  = [Math]::Round(($medCount  / $totalFindings) * 100)
-    $lowPct  = [Math]::Round(($lowCount  / $totalFindings) * 100)
-    $infoPct = [Math]::Max(0, 100 - $critPct - $highPct - $medPct - $lowPct)
-    @"
-<div class="dist-bar">
-  $(if ($critPct -gt 0) { "<div class='dist-seg' style='width:$critPct%;background:#DC2626;'>$(if ($critPct -gt 5) { $critCount } else { '' })</div>" })
-  $(if ($highPct -gt 0) { "<div class='dist-seg' style='width:$highPct%;background:#EA580C;'>$(if ($highPct -gt 5) { $highCount } else { '' })</div>" })
-  $(if ($medPct  -gt 0) { "<div class='dist-seg' style='width:$medPct%;background:#D97706;'>$(if ($medPct -gt 5) { $medCount } else { '' })</div>" })
-  $(if ($lowPct  -gt 0) { "<div class='dist-seg' style='width:$lowPct%;background:#2563EB;'>$(if ($lowPct -gt 5) { $lowCount } else { '' })</div>" })
-  $(if ($infoPct -gt 0 -and $infoCount -gt 0) { "<div class='dist-seg' style='width:$infoPct%;background:#6B7280;'>$(if ($infoPct -gt 5) { $infoCount } else { '' })</div>" })
-</div>
-<div class="dist-legend">
-  <div class="dist-legend-item"><div class="legend-dot" style="background:#DC2626"></div>Critical ($critCount)</div>
-  <div class="dist-legend-item"><div class="legend-dot" style="background:#EA580C"></div>High ($highCount)</div>
-  <div class="dist-legend-item"><div class="legend-dot" style="background:#D97706"></div>Medium ($medCount)</div>
-  <div class="dist-legend-item"><div class="legend-dot" style="background:#2563EB"></div>Low ($lowCount)</div>
-  <div class="dist-legend-item"><div class="legend-dot" style="background:#6B7280"></div>Info ($infoCount)</div>
-</div>
-"@
-  } else { "<p style='color:#64748B'>No findings detected.</p>" })
+  $severitySectionHtml
 </section>
 
 <!-- TOP 10 FINDINGS -->
@@ -609,21 +648,10 @@ function Build-TiTCReportHTML {
 </section>
 
 <!-- QUICK WINS -->
-$(if ($quickWins.Count -gt 0) {
-"<section class='section'>
-  <h2 class='section-title'>&#9889; Quick Wins</h2>
-  <p style='color:#64748B;margin-bottom:20px;'>These findings can be resolved quickly with minimal effort and no significant disruption.</p>
-  <div class='qw-grid'>$quickWinCards</div>
-</section>"
-})
+$quickWinsSectionHtml
 
 <!-- COMPLIANCE POSTURE -->
-$(if ($compGaps.Keys.Count -gt 0) {
-"<section class='section page-break'>
-  <h2 class='section-title'>Compliance Posture</h2>
-  $complianceHtml
-</section>"
-})
+$complianceSectionHtml
 
 <!-- LICENSE WASTE -->
 $licenseWasteHtml

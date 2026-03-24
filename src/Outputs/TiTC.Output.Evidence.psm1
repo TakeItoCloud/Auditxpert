@@ -45,7 +45,28 @@ if (Test-Path $CorePath) {
 $script:COMPONENT    = 'Output.Evidence'
 $script:TOOL_VERSION = '1.0.0'
 
-$script:COMPLIANCE_MAP_DIR = Join-Path (Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent) 'compliance'
+# Use module file's absolute path for reliable resolution regardless of $PSScriptRoot context
+$script:COMPLIANCE_MAP_DIR = Join-Path (Split-Path (Split-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) -Parent) -Parent) 'compliance'
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+function ConvertTo-SerializableObject {
+    param($InputObject)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [hashtable] -or $InputObject -is [System.Collections.Specialized.OrderedDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in $InputObject.Keys) {
+            $ordered[[string]$key] = ConvertTo-SerializableObject $InputObject[$key]
+        }
+        return $ordered
+    }
+    if ($InputObject -is [System.Collections.IList] -and $InputObject -isnot [string]) {
+        return @($InputObject | ForEach-Object { ConvertTo-SerializableObject $_ })
+    }
+    return $InputObject
+}
 
 # ============================================================================
 # MAIN EXPORT FUNCTION
@@ -212,7 +233,7 @@ function Export-TiTCEvidencePack {
                 }
             }
 
-            $rawEvidence | ConvertTo-Json -Depth 8 |
+            (ConvertTo-SerializableObject $rawEvidence) | ConvertTo-Json -Depth 8 |
                 Set-Content -Path (Join-Path $ctrlDir 'evidence.json') -Encoding UTF8 -Force
 
             # Write findings CSV for this control
@@ -275,10 +296,10 @@ function Export-TiTCEvidencePack {
         AssessmentProfile = $Report.AssessmentProfile
         TotalFindings = $allFindings.Count
     }
-    $metadata | ConvertTo-Json -Depth 5 |
+    (ConvertTo-SerializableObject $metadata) | ConvertTo-Json -Depth 5 |
         Set-Content -Path (Join-Path $packRoot 'metadata.json') -Encoding UTF8 -Force
 
-    $packSummary | ConvertTo-Json -Depth 5 |
+    (ConvertTo-SerializableObject $packSummary) | ConvertTo-Json -Depth 5 |
         Set-Content -Path (Join-Path $packRoot 'summary.json') -Encoding UTF8 -Force
 
     Write-TiTCLog "Evidence pack complete: $packRoot" -Level Success -Component $script:COMPONENT

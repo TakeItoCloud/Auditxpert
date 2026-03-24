@@ -125,7 +125,7 @@ function Invoke-TiTCRiskAnalysis {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [TiTCCollectorResult[]]$CollectorResults,
+        $CollectorResults,
 
         [hashtable]$Config = @{},
 
@@ -251,11 +251,11 @@ function Get-TiTCCompositeRiskScore {
     #>
     [CmdletBinding()]
     param(
-        [TiTCFinding[]]$Findings,
+        $Findings,
         [hashtable]$Config
     )
 
-    $score = [TiTCRiskScore]::new()
+    $score = New-TiTCRiskScore
     $score.Calculate($Findings)
 
     # ── Apply domain weight adjustments ─────────────────────────────
@@ -323,7 +323,7 @@ function Get-TiTCCategoryScores {
     #>
     [CmdletBinding()]
     param(
-        [TiTCFinding[]]$Findings
+        $Findings
     )
 
     $categoryResults = [ordered]@{}
@@ -393,7 +393,7 @@ function Get-TiTCCategoryScores {
 
 function Get-TiTCSeverityDistribution {
     [CmdletBinding()]
-    param([TiTCFinding[]]$Findings)
+    param($Findings)
 
     $open = $Findings | Where-Object { $_.Status -eq 'Open' -or $_.Status -eq 'InProgress' }
 
@@ -430,7 +430,7 @@ function Get-TiTCRemediationPriorities {
         Output is sorted by priority score descending.
     #>
     [CmdletBinding()]
-    param([TiTCFinding[]]$Findings)
+    param($Findings)
 
     $openFindings = $Findings | Where-Object { $_.Status -eq 'Open' -or $_.Status -eq 'InProgress' }
 
@@ -489,7 +489,7 @@ function Get-TiTCQuickWins {
         Identifies findings that can be fixed quickly with high impact.
     #>
     [CmdletBinding()]
-    param([TiTCFinding[]]$Findings)
+    param($Findings)
 
     $openFindings = $Findings | Where-Object { $_.Status -eq 'Open' }
 
@@ -532,7 +532,7 @@ function Get-TiTCComplianceGapAnalysis {
     #>
     [CmdletBinding()]
     param(
-        [TiTCFinding[]]$Findings,
+        $Findings,
 
         [ValidateSet('ISO27001', 'SOC2Lite', 'CyberInsurance', 'CISControls', 'InternalRisk')]
         [string]$Framework,
@@ -655,7 +655,7 @@ function Get-TiTCTrendAnalysis {
     #>
     [CmdletBinding()]
     param(
-        [TiTCFinding[]]$CurrentFindings,
+        $CurrentFindings,
         [hashtable]$HistoricalReport
     )
 
@@ -706,7 +706,7 @@ function Get-TiTCExecutiveNarrative {
     #>
     [CmdletBinding()]
     param(
-        [TiTCRiskScore]$RiskScore,
+        $RiskScore,
         [hashtable]$CategoryScores,
         [hashtable]$SeverityDist,
         [hashtable]$ComplianceGaps,

@@ -13,6 +13,12 @@ config.local.json
 *.pfx
 *.p12
 
+# ─── Certificates (NEVER commit) ───────────────────────────────────────────
+certs/*.pfx
+certs/*.cer
+certs/*.pem
+certs/*-config.json
+
 # ─── IDE / editor ──────────────────────────────────────────────────────────
 .vscode/
 *.code-workspace

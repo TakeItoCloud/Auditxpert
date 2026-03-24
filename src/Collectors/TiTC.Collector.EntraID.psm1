@@ -86,7 +86,7 @@ function Invoke-TiTCEntraIDCollector {
         Specific checks to run. Default runs all checks.
     #>
     [CmdletBinding()]
-    [OutputType([TiTCCollectorResult])]
+    [OutputType([PSObject])]
     param(
         [hashtable]$Config = @{},
 
@@ -134,7 +134,7 @@ function Invoke-TiTCEntraIDCollector {
                 $result.Errors += $errorMsg
 
                 if ($result.Status -eq 'Success') {
-                    $result.Status = [TiTCCollectorStatus]::PartialSuccess
+                    $result.Status = 'PartialSuccess'
                 }
             }
         }
@@ -157,7 +157,7 @@ function Test-TiTCMFAEnrollment {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking MFA enrollment status..." -Level Info -Component $script:COMPONENT
@@ -179,6 +179,7 @@ function Test-TiTCMFAEnrollment {
     $smsOnlyUsers = [System.Collections.ArrayList]::new()
 
     foreach ($user in $users) {
+        if (-not $user.id) { continue }
         try {
             $authMethods = (Invoke-TiTCGraphRequest `
                 -Endpoint "/users/$($user.id)/authentication/methods" `
@@ -225,13 +226,13 @@ function Test-TiTCMFAEnrollment {
     # ── Finding: Users without MFA ──────────────────────────────────
     if ($usersWithoutMFA.Count -gt 0) {
         $severity = if ($usersWithoutMFA.Count -gt ($users.Count * 0.3)) {
-            [TiTCSeverity]::Critical
+            'Critical'
         }
         elseif ($usersWithoutMFA.Count -gt ($users.Count * 0.1)) {
-            [TiTCSeverity]::High
+            'High'
         }
         else {
-            [TiTCSeverity]::Medium
+            'Medium'
         }
 
         $Result.Findings += New-TiTCFinding `
@@ -294,15 +295,14 @@ function Test-TiTCPrivilegedAccess {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking privileged role assignments..." -Level Info -Component $script:COMPONENT
 
-    # Get all directory role assignments
+    # Get all directory role assignments (no $select — endpoint has limited $select support)
     $roleAssignments = (Invoke-TiTCGraphRequest `
         -Endpoint '/roleManagement/directory/roleAssignments' `
-        -Expand 'principal' `
         -AllPages `
         -Component $script:COMPONENT
     ).value
@@ -310,7 +310,6 @@ function Test-TiTCPrivilegedAccess {
     # Get role definitions
     $roleDefinitions = (Invoke-TiTCGraphRequest `
         -Endpoint '/roleManagement/directory/roleDefinitions' `
-        -Select 'id,displayName,templateId,isBuiltIn' `
         -AllPages `
         -Component $script:COMPONENT
     ).value
@@ -318,6 +317,27 @@ function Test-TiTCPrivilegedAccess {
     $roleLookup = @{}
     foreach ($rd in $roleDefinitions) {
         $roleLookup[$rd.id] = $rd
+    }
+
+    $principalCache = @{}
+    foreach ($assignment in $roleAssignments) {
+        if (-not $assignment.principalId -or $principalCache.ContainsKey($assignment.principalId)) {
+            continue
+        }
+
+        try {
+            $principalCache[$assignment.principalId] = Invoke-TiTCGraphRequest `
+                -Endpoint "/directoryObjects/$($assignment.principalId)" `
+                -Component $script:COMPONENT `
+                -NoTop
+        }
+        catch {
+            $principalCache[$assignment.principalId] = [PSCustomObject]@{
+                id = $assignment.principalId
+                displayName = $assignment.principalId
+                '@odata.type' = '#microsoft.graph.directoryObject'
+            }
+        }
     }
 
     # ── Analyze Global Administrators ───────────────────────────────
@@ -346,12 +366,17 @@ function Test-TiTCPrivilegedAccess {
             -Remediation "Review all Global Admin assignments. Use least-privilege roles (e.g., Exchange Admin, User Admin) instead. Implement PIM for just-in-time elevation." `
             -RemediationUrl 'https://learn.microsoft.com/entra/identity/role-based-access-control/best-practices' `
             -ComplianceControls @('ISO27001:A.9.2.3', 'CIS:1.1.4', 'SOC2:CC6.3', 'NIST:AC-6') `
-            -AffectedResources ($globalAdminAssignments | ForEach-Object { $_.principal.displayName } | Select-Object -First 20) `
+            -AffectedResources ($globalAdminAssignments | ForEach-Object {
+                if ($principalCache[$_.principalId].displayName) { $principalCache[$_.principalId].displayName } else { $_.principalId }
+            } | Select-Object -First 20) `
             -Evidence @{
                 GlobalAdminCount = $globalAdminAssignments.Count
                 Threshold        = $maxAdmins
                 Assignments      = $globalAdminAssignments | ForEach-Object {
-                    @{ Principal = $_.principal.displayName; PrincipalId = $_.principalId }
+                    @{
+                        Principal = if ($principalCache[$_.principalId].displayName) { $principalCache[$_.principalId].displayName } else { $_.principalId }
+                        PrincipalId = $_.principalId
+                    }
                 }
             } `
             -DetectedBy $script:COMPONENT `
@@ -371,10 +396,10 @@ function Test-TiTCPrivilegedAccess {
         # Check if assignment is permanent (no end date = standing access)
         if (-not $assignment.scheduleInfo -or -not $assignment.scheduleInfo.expiration) {
             $null = $permanentPrivileged.Add(@{
-                Principal = $assignment.principal.displayName
+                Principal = if ($principalCache[$assignment.principalId].displayName) { $principalCache[$assignment.principalId].displayName } else { $assignment.principalId }
                 Role      = $roleDef.displayName
-                Type      = if ($assignment.principal.'@odata.type' -match 'group') { 'Group' }
-                           elseif ($assignment.principal.'@odata.type' -match 'servicePrincipal') { 'ServicePrincipal' }
+                Type      = if ($principalCache[$assignment.principalId].'@odata.type' -match 'group') { 'Group' }
+                           elseif ($principalCache[$assignment.principalId].'@odata.type' -match 'servicePrincipal') { 'ServicePrincipal' }
                            else { 'User' }
             })
         }
@@ -435,7 +460,7 @@ function Test-TiTCConditionalAccessPolicies {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking Conditional Access policies..." -Level Info -Component $script:COMPONENT
@@ -548,7 +573,7 @@ function Test-TiTCStaleAccounts {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for stale accounts..." -Level Info -Component $script:COMPONENT
@@ -597,13 +622,13 @@ function Test-TiTCStaleAccounts {
 
     if ($staleUsers.Count -gt 0) {
         $severity = if ($staleUsers.Count -gt ($users.Count * 0.2)) {
-            [TiTCSeverity]::High
+            'High'
         }
         elseif ($staleUsers.Count -gt 10) {
-            [TiTCSeverity]::Medium
+            'Medium'
         }
         else {
-            [TiTCSeverity]::Low
+            'Low'
         }
 
         $Result.Findings += New-TiTCFinding `
@@ -655,7 +680,7 @@ function Test-TiTCGuestAccounts {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking guest account hygiene..." -Level Info -Component $script:COMPONENT
@@ -736,7 +761,7 @@ function Test-TiTCApplicationSecurity {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking application security..." -Level Info -Component $script:COMPONENT
@@ -885,7 +910,7 @@ function Test-TiTCPasswordPolicy {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking password policies..." -Level Info -Component $script:COMPONENT
@@ -902,8 +927,9 @@ function Test-TiTCPasswordPolicy {
         $authMethodsPolicy = (Invoke-TiTCGraphRequest `
             -Endpoint '/policies/authenticationMethodsPolicy' `
             -Beta `
+            -NoTop `
             -Component $script:COMPONENT
-        ).value
+        )
     }
     catch {
         Write-TiTCLog "Could not retrieve password policies: $_" -Level Warning -Component $script:COMPONENT
@@ -933,6 +959,7 @@ function Test-TiTCPasswordPolicy {
         $sspr = Invoke-TiTCGraphRequest `
             -Endpoint '/policies/authorizationPolicy' `
             -Select 'id,defaultUserRolePermissions,allowedToUseSSPR' `
+            -NoTop `
             -Component $script:COMPONENT
     }
     catch {
@@ -955,7 +982,7 @@ function Test-TiTCAuthenticationMethods {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking authentication methods policy..." -Level Info -Component $script:COMPONENT
@@ -963,6 +990,7 @@ function Test-TiTCAuthenticationMethods {
     try {
         $authMethodsPolicy = Invoke-TiTCGraphRequest `
             -Endpoint '/policies/authenticationMethodsPolicy' `
+            -NoTop `
             -Component $script:COMPONENT
 
         $methods = $authMethodsPolicy.authenticationMethodConfigurations
@@ -1026,7 +1054,7 @@ function Test-TiTCSignInRiskPolicies {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking sign-in risk and identity protection..." -Level Info -Component $script:COMPONENT
@@ -1092,7 +1120,7 @@ function Test-TiTCSignInRiskPolicies {
             if ($riskyUsers.Count -gt 0) {
                 $highRisk = $riskyUsers | Where-Object { $_.riskLevel -eq 'high' }
 
-                $severity = if ($highRisk.Count -gt 0) { [TiTCSeverity]::Critical } else { [TiTCSeverity]::High }
+                $severity = if ($highRisk.Count -gt 0) { 'Critical' } else { 'High' }
 
                 $Result.Findings += New-TiTCFinding `
                     -Title "Users currently flagged as at-risk" `

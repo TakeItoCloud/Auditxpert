@@ -85,7 +85,7 @@ function Invoke-TiTCLicensingCollector {
         Specific checks to run. Default runs all checks.
     #>
     [CmdletBinding()]
-    [OutputType([TiTCCollectorResult])]
+    [OutputType([PSObject])]
     param(
         [hashtable]$Config = @{},
 
@@ -129,7 +129,7 @@ function Invoke-TiTCLicensingCollector {
                 $result.Errors += $errorMsg
 
                 if ($result.Status -eq 'Success') {
-                    $result.Status = [TiTCCollectorStatus]::PartialSuccess
+                    $result.Status = 'PartialSuccess'
                 }
             }
         }
@@ -151,7 +151,7 @@ function Test-TiTCLicenseInventory {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Building license inventory..." -Level Info -Component $script:COMPONENT
@@ -159,6 +159,7 @@ function Test-TiTCLicenseInventory {
     $skus = (Invoke-TiTCGraphRequest `
         -Endpoint '/subscribedSkus' `
         -Select 'id,skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus,servicePlans,appliesTo' `
+        -NoTop `
         -Component $script:COMPONENT
     ).value
 
@@ -212,7 +213,7 @@ function Test-TiTCUnusedLicenses {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for unused license waste..." -Level Info -Component $script:COMPONENT
@@ -223,6 +224,7 @@ function Test-TiTCUnusedLicenses {
         (Invoke-TiTCGraphRequest `
             -Endpoint '/subscribedSkus' `
             -Select 'id,skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus' `
+            -NoTop `
             -Component $script:COMPONENT
         ).value
     }
@@ -264,7 +266,7 @@ function Test-TiTCUnusedLicenses {
             }
         }
 
-        $waste = [TiTCLicenseWaste]::new()
+        $waste = New-TiTCLicenseWaste
         $waste.SkuName          = $skuPartNumber
         $waste.SkuId            = $sku.skuId
         $waste.TotalLicenses    = $enabled
@@ -329,7 +331,7 @@ function Test-TiTCDuplicateLicenses {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for duplicate/overlapping license assignments..." -Level Info -Component $script:COMPONENT
@@ -357,7 +359,7 @@ function Test-TiTCDuplicateLicenses {
     $skuMap = @{}
     $skus = if ($Result.RawData['SubscribedSkus']) { $Result.RawData['SubscribedSkus'] } else { @() }
     foreach ($sku in $skus) {
-        $skuMap[$sku.skuId] = $sku.skuPartNumber
+        if ($sku.skuId) { $skuMap[$sku.skuId] = $sku.skuPartNumber }
     }
 
     $duplicateUsers = [System.Collections.ArrayList]::new()
@@ -367,7 +369,7 @@ function Test-TiTCDuplicateLicenses {
         if (-not $user.assignedLicenses -or $user.assignedLicenses.Count -lt 2) { continue }
 
         $userSkuPartNumbers = $user.assignedLicenses | ForEach-Object {
-            $skuMap[$_.skuId]
+            if ($_.skuId) { $skuMap[$_.skuId] }
         } | Where-Object { $_ }
 
         $foundOverlaps = [System.Collections.ArrayList]::new()
@@ -427,7 +429,7 @@ function Test-TiTCOverProvisionedUsers {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for over-provisioned users (E5 with minimal feature usage)..." -Level Info -Component $script:COMPONENT
@@ -435,26 +437,16 @@ function Test-TiTCOverProvisionedUsers {
     # Get active user detail report for last 180 days
     $activeUserDetail = @()
     try {
-        # This report returns a CSV blob — handle accordingly
-        $reportResponse = Invoke-TiTCGraphRequest `
-            -Endpoint '/reports/getOffice365ActiveUserDetail(period=''D180'')' `
-            -Beta `
-            -Component $script:COMPONENT
+        $tempCsv = Join-Path ([System.IO.Path]::GetTempPath()) "titc-active-user-detail-$([guid]::NewGuid()).csv"
+        Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri 'https://graph.microsoft.com/v1.0/reports/getOffice365ActiveUserDetail(period=''D180'')' `
+            -OutputFilePath $tempCsv `
+            -ErrorAction Stop | Out-Null
 
-        # The response is CSV content
-        if ($reportResponse -is [string]) {
-            $csvLines = $reportResponse -split "`n" | Where-Object { $_ }
-            if ($csvLines.Count -gt 1) {
-                $headers = ($csvLines[0] -split ',') | ForEach-Object { $_.Trim('"') }
-                $activeUserDetail = for ($i = 1; $i -lt $csvLines.Count; $i++) {
-                    $values = $csvLines[$i] -split ','
-                    $obj = [ordered]@{}
-                    for ($j = 0; $j -lt $headers.Count -and $j -lt $values.Count; $j++) {
-                        $obj[$headers[$j]] = $values[$j].Trim('"')
-                    }
-                    [PSCustomObject]$obj
-                }
-            }
+        if (Test-Path $tempCsv) {
+            $activeUserDetail = Import-Csv -Path $tempCsv
+            Remove-Item -Path $tempCsv -Force -ErrorAction SilentlyContinue
         }
     }
     catch {
@@ -478,11 +470,11 @@ function Test-TiTCOverProvisionedUsers {
 
     $skuMap = @{}
     $skus = if ($Result.RawData['SubscribedSkus']) { $Result.RawData['SubscribedSkus'] } else { @() }
-    foreach ($sku in $skus) { $skuMap[$sku.skuId] = $sku.skuPartNumber }
+    foreach ($sku in $skus) { if ($sku.skuId) { $skuMap[$sku.skuId] = $sku.skuPartNumber } }
 
     # Find E5 users
     $e5Users = $users | Where-Object {
-        $userSkus = $_.assignedLicenses | ForEach-Object { $skuMap[$_.skuId] }
+        $userSkus = $_.assignedLicenses | ForEach-Object { if ($_.skuId) { $skuMap[$_.skuId] } }
         $userSkus -contains 'SPE_E5' -or $userSkus -contains 'ENTERPRISEPREMIUM'
     }
 
@@ -556,7 +548,7 @@ function Test-TiTCTrialSubscriptions {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for trial subscriptions nearing expiry..." -Level Info -Component $script:COMPONENT
@@ -567,6 +559,7 @@ function Test-TiTCTrialSubscriptions {
         (Invoke-TiTCGraphRequest `
             -Endpoint '/subscribedSkus' `
             -Select 'id,skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus,appliesTo' `
+            -NoTop `
             -Component $script:COMPONENT
         ).value
     }
@@ -630,7 +623,7 @@ function Test-TiTCUnlicensedUsers {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Checking for unlicensed enabled accounts..." -Level Info -Component $script:COMPONENT
@@ -692,7 +685,7 @@ function Test-TiTCLicenseWasteSummary {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        [TiTCCollectorResult]$Result
+        $Result
     )
 
     Write-TiTCLog "Generating license waste summary..." -Level Info -Component $script:COMPONENT

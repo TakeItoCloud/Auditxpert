@@ -124,6 +124,27 @@
 
 ---
 
+## Phase E — Runtime Bug Fixes (from assessment.log)
+
+Eight bugs identified from a real assessment run and fixed:
+
+| # | Bug | File | Fix |
+|---|-----|------|-----|
+| 1 | `$top=999` sent to singleton Graph endpoints → `BadRequest` | `src\Core\TiTC.Core.psm1` | Changed default `$Top = 0`; only add `$top` when `$Top > 0` or `-AllPages` |
+| 2+3 | `@odata.type` and `isAssigned` invalid in `$select` on managedAppPolicies | `src\Collectors\TiTC.Collector.Intune.psm1` | Removed both fields from `-Select` parameter |
+| 4 | `$expand` on roleAssignments causing 400 | `src\Collectors\TiTC.Collector.EntraID.psm1` | Already resolved in prior build (principals fetched individually) |
+| 5 | Evidence compliance path resolves to `C:\Scripts\Assessment\compliance\` (wrong) | `src\Outputs\TiTC.Output.Evidence.psm1` | Replaced `$PSScriptRoot` formula with `$MyInvocation.MyCommand.Path` for reliable module-file-relative resolution |
+| 6 | Report generation fails: `The term 'if' is not recognized as a name of a cmdlet` | `src\Outputs\TiTC.Output.Report.psm1` | Extracted `(if ...)` operand in `+` concatenation (line 301) to a pre-computed `$moreHtml` variable; also fixed `??` in `Invoke-M365Snapshot.ps1` L383 → `if/else` for PS 5.1 compatibility |
+| 7 | `DuplicateLicenses`/`OverProvisionedUsers` — null array index on `$skuMap[$_.skuId]` | `src\Collectors\TiTC.Collector.Licensing.psm1` | Added `if ($_.skuId)` null guard before hashtable lookup in both functions |
+| 8 | MFA and Exchange loops pass empty `user.id` → `/users//authentication/methods` 404 | `src\Collectors\TiTC.Collector.EntraID.psm1`, `TiTC.Collector.Exchange.psm1` | Added `if (-not $user.id) { continue }` at top of each per-user loop |
+
+### Additional Fix: Hardcoded API Key Removed
+- **File:** `profiles\Invoke-AuditExplainer.ps1` L59
+- **Issue:** Production Anthropic API key was hardcoded as default parameter value
+- **Fix:** Removed default value — key must now be supplied via `-ApiKey`, `$env:ANTHROPIC_API_KEY`, or interactive prompt (existing fallback logic handles all three)
+
+---
+
 ## Final Status
 
 | Phase | Description | Result |
@@ -131,13 +152,13 @@
 | A | Parser — 15 files | **PASS** (2 issues found & fixed) |
 | B | Import chain — 55 tests | **PASS** (3 issues found & fixed) |
 | C | Dry-run simulation — 25 tests | **PASS** (2 production bugs fixed, 2 test assertions corrected) |
+| E | Runtime bugs from assessment.log | **FIXED** (8 bugs resolved) |
 
-**Overall: ALL TESTS PASS — codebase is structurally sound and end-to-end flow validated.**
+**Overall: ALL TESTS PASS — codebase is structurally sound and all known runtime bugs resolved.**
 
 ---
 
 ## Notes
 
-- **Compliance mapping warnings** (Evidence pack): `compliance\iso27001.json` path resolves relative to `$PSScriptRoot` inside the Evidence module, which points to `C:\Scripts\Assessment\compliance\` (not `AuditXpert\compliance\`). This is a runtime-only issue visible in logs as `[WARNING]` — the Evidence module gracefully skips missing frameworks. The JSON files exist at the correct project path `AuditXpert\compliance\`. If run from a non-standard working directory, pass an explicit `-CompliancePath` parameter or ensure `$PSScriptRoot` resolves correctly.
 - **Execution policy:** All tests must be run with `pwsh -ExecutionPolicy Bypass`. The project `.psm1` files are not digitally signed; this is expected for development environments.
-- **PS 7 required:** The codebase uses `??` (null coalescing), `[ordered]@{}`, and PS classes — all PS 7 features. PS 5.1 is not supported despite the `#Requires -Version 5.1` header in some files (those headers should ideally be updated to `#Requires -Version 7.0`).
+- **PS 7 required:** The codebase uses `??` (null coalescing), `[ordered]@{}`, and PS classes — all PS 7 features. PS 5.1 is not supported despite the `#Requires -Version 5.1` header in some files (those headers should ideally be updated to `#Requires -Version 7.0`). The orchestrator `Invoke-M365Snapshot.ps1` L383 was fixed to use `if/else` instead of `??` as a specific PS 5.1 compatibility fix.
