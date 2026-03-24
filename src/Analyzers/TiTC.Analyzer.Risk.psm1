@@ -560,16 +560,17 @@ function Get-TiTCComplianceGapAnalysis {
         }
     }
 
-    $frameworkData = Get-Content $compliancePath -Raw | ConvertFrom-Json -AsHashtable
+    $frameworkData = Get-Content $compliancePath -Raw | ConvertFrom-Json
     $controls = $frameworkData.controls
+    $controlKeys = $controls | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
 
     $controlResults = [ordered]@{}
     $totalControls = 0
     $coveredControls = 0
     $failedControls = 0
 
-    foreach ($controlId in $controls.Keys) {
-        $control = $controls[$controlId]
+    foreach ($controlId in $controlKeys) {
+        $control = $controls.$controlId
         $totalControls++
 
         # Find findings that map to this control
@@ -612,7 +613,7 @@ function Get-TiTCComplianceGapAnalysis {
             OpenIssues   = $openIssues.Count
             CriticalHigh = $criticalOrHigh.Count
             Findings     = ($matchingFindings | ForEach-Object { $_.FindingId })
-            Required     = $control.required ?? $true
+            Required     = if ($null -ne $control.required) { $control.required } else { $true }
         }
     }
 
@@ -659,8 +660,8 @@ function Get-TiTCTrendAnalysis {
         [hashtable]$HistoricalReport
     )
 
-    $previousScore = $HistoricalReport.RiskScore.OverallScore ?? 0
-    $previousFindings = $HistoricalReport.AllFindings ?? @()
+    $previousScore = if ($HistoricalReport.RiskScore) { $HistoricalReport.RiskScore.OverallScore } else { 0 }
+    $previousFindings = if ($HistoricalReport.AllFindings) { $HistoricalReport.AllFindings } else { @() }
 
     $currentScore = 0
     $currentOpen = ($CurrentFindings | Where-Object { $_.Status -eq 'Open' }).Count
@@ -733,7 +734,7 @@ function Get-TiTCExecutiveNarrative {
         OverallAssessment   = "The organization's Microsoft 365 security posture is rated $scoreLabel ($($RiskScore.OverallRating)) with a risk score of $($RiskScore.OverallScore) out of 100. A total of $($SeverityDist.Total) security findings were identified, including $($SeverityDist.Critical) critical and $($SeverityDist.High) high-severity issues requiring immediate attention."
 
         HighestRiskArea     = if ($worstCategory) {
-            "$($worstCategory.Key) is the area of highest concern (score: $($worstCategory.Value.Score)/100, rating: $($worstCategory.Value.Rating)) with $($worstCategory.Value.Critical) critical and $($worstCategory.Value.High) high-severity findings."
+            "$($worstCategory.Key) is the area of highest concern (rating: $($worstCategory.Value.Rating)) with $($worstCategory.Value.Critical) critical and $($worstCategory.Value.High) high-severity findings."
         } else { "No high-risk areas identified." }
 
         StrongestArea       = if ($bestCategory) {
@@ -747,7 +748,10 @@ function Get-TiTCExecutiveNarrative {
         }
 
         ComplianceStatus    = ($ComplianceGaps.GetEnumerator() | ForEach-Object {
-            "$($_.Value.FrameworkName ?? $_.Key): $($_.Value.CoveragePercent)% coverage ($($_.Value.NonCompliant) non-compliant controls)"
+            $fwLabel = if ($_.Value.FrameworkName) { $_.Value.FrameworkName } else { $_.Key }
+            $fwCov   = if ($null -ne $_.Value.CoveragePercent) { $_.Value.CoveragePercent } else { 0 }
+            $fwFail  = if ($null -ne $_.Value.NonCompliant) { $_.Value.NonCompliant } else { 0 }
+            "${fwLabel}: ${fwCov}% coverage (${fwFail} non-compliant controls)"
         }) -join '. '
 
         QuickWinCount       = $QuickWins.Count

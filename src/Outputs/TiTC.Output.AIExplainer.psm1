@@ -60,7 +60,7 @@ function Invoke-TiTCAIExplainer {
         Array of TiTCFinding objects to explain.
 
     .PARAMETER Provider
-        AI provider: 'Claude' (Anthropic) or 'OpenAI'.
+        AI provider: 'Auto', 'Claude' (Anthropic), or 'OpenAI'.
 
     .PARAMETER ApiKey
         API key for the chosen provider.
@@ -82,8 +82,8 @@ function Invoke-TiTCAIExplainer {
         [Parameter(Mandatory)]
         [object[]]$Findings,
 
-        [ValidateSet('OpenAI', 'Claude', 'Local')]
-        [string]$Provider = 'Claude',
+        [ValidateSet('Auto', 'OpenAI', 'Claude', 'Local')]
+        [string]$Provider = 'Auto',
 
         [string]$ApiKey,
         [string]$ApiEndpoint,
@@ -95,8 +95,38 @@ function Invoke-TiTCAIExplainer {
         [switch]$HighSeverityOnly
     )
 
-    # Resolve API key from parameter or environment
-    if (-not $ApiKey) {
+    $requestedProvider = $Provider
+    $requiredEnvVar = $null
+
+    if ($Provider -eq 'Auto') {
+        if (-not $ApiKey) {
+            if (-not [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+                $Provider = 'Claude'
+                $ApiKey = $env:ANTHROPIC_API_KEY
+                $requiredEnvVar = 'ANTHROPIC_API_KEY'
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
+                $Provider = 'OpenAI'
+                $ApiKey = $env:OPENAI_API_KEY
+                $requiredEnvVar = 'OPENAI_API_KEY'
+            }
+            else {
+                Write-TiTCLog "AI provider 'Auto' could not resolve credentials. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or provide -ApiKey with -Provider Claude/OpenAI." `
+                    -Level Error -Component $script:COMPONENT
+                throw "AI provider 'Auto' could not resolve credentials. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or provide -ApiKey with -Provider Claude/OpenAI."
+            }
+        }
+        else {
+            Write-TiTCLog "AI provider 'Auto' cannot be used with -ApiKey alone. Specify -Provider Claude or OpenAI when providing -ApiKey." `
+                -Level Error -Component $script:COMPONENT
+            throw "AI provider 'Auto' cannot be used with -ApiKey alone. Specify -Provider Claude or OpenAI when providing -ApiKey."
+        }
+    }
+    elseif (-not $ApiKey -and $Provider -ne 'Local') {
+        $requiredEnvVar = switch ($Provider) {
+            'Claude' { 'ANTHROPIC_API_KEY' }
+            'OpenAI' { 'OPENAI_API_KEY' }
+        }
         $ApiKey = switch ($Provider) {
             'Claude' { $env:ANTHROPIC_API_KEY }
             'OpenAI' { $env:OPENAI_API_KEY }
@@ -104,9 +134,9 @@ function Invoke-TiTCAIExplainer {
     }
 
     if (-not $ApiKey -and $Provider -ne 'Local') {
-        Write-TiTCLog "No API key provided for $Provider. Set environment variable ANTHROPIC_API_KEY or OPENAI_API_KEY." `
+        Write-TiTCLog "AI provider '$Provider' requires API key '$requiredEnvVar'. Provide -ApiKey or set $requiredEnvVar." `
             -Level Error -Component $script:COMPONENT
-        throw "AI Explainer requires an API key. Provide -ApiKey or set the environment variable."
+        throw "AI provider '$Provider' requires API key '$requiredEnvVar'. Provide -ApiKey or set $requiredEnvVar."
     }
 
     # Resolve model
@@ -121,7 +151,7 @@ function Invoke-TiTCAIExplainer {
     }
     $toExplain = $toExplain | Select-Object -First $MaxFindings
 
-    Write-TiTCLog "AI Explainer: processing $($toExplain.Count) findings via $Provider ($Model)..." `
+    Write-TiTCLog "AI Explainer: processing $($toExplain.Count) findings via $Provider ($Model) [requested: $requestedProvider]..." `
         -Level Info -Component $script:COMPONENT
 
     $enriched = [System.Collections.ArrayList]::new()
@@ -347,12 +377,13 @@ function ConvertFrom-TiTCQualysCSV {
         $remed   = if ($row.Solution)           { $row.Solution } else { '' }
         $host_   = if ($row.IP)                 { $row.IP } elseif ($row.DNS) { $row.DNS } else { '' }
         $cves    = if ($row.'CVE ID' -and $row.'CVE ID' -ne '') { @("CVE:$($row.'CVE ID')") } else { @() }
+        $affectedResources = if ($host_) { @($host_) } else { @() }
 
         $null = $result.Add((New-TiTCNormalizedFinding `
             -Title $title -Severity $sev -Description $desc -Remediation $remed `
             -Domain 'Network' -Tags @('Qualys', 'Vulnerability') `
             -ComplianceControls $cves `
-            -AffectedResources @(if ($host_) { $host_ }) `
+            -AffectedResources $affectedResources `
             -Source 'Qualys'))
     }
     return @($result)
@@ -379,13 +410,15 @@ function ConvertFrom-TiTCNessusCSV {
         $host_    = if ($row.Host)       { $row.Host }     else { '' }
         $cves     = if ($row.CVE -and $row.CVE -ne '') { @("CVE:$($row.CVE)") } else { @() }
         $pluginId = if ($row.'Plugin ID' -and $row.'Plugin ID' -ne '') { "Nessus:$($row.'Plugin ID')" } else { $null }
-        $controls = @($cves) + @(if ($pluginId) { $pluginId })
+        $controls = @($cves)
+        if ($pluginId) { $controls += $pluginId }
+        $affectedResources = if ($host_) { @($host_) } else { @() }
 
         $null = $result.Add((New-TiTCNormalizedFinding `
             -Title $title -Severity $sev -Description $desc -Remediation $remed `
             -Domain 'Network' -Tags @('Nessus', 'Vulnerability') `
             -ComplianceControls $controls `
-            -AffectedResources @(if ($host_) { $host_ }) `
+            -AffectedResources $affectedResources `
             -Source 'Nessus'))
     }
     return @($result)

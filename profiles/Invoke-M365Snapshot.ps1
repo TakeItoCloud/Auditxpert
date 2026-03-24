@@ -20,6 +20,10 @@
     .\Invoke-M365Snapshot.ps1 -TenantId $tid -ClientId $cid -ClientSecret $secret -Profile MSPAudit
 
 .EXAMPLE
+    # Certificate-based assessment
+    .\Invoke-M365Snapshot.ps1 -TenantId $tid -ClientId $cid -CertificateThumbprint $thumb
+
+.EXAMPLE
     # Quick scan — identity and licensing only
     .\Invoke-M365Snapshot.ps1 -TenantId $tid -Profile Quick -Domains EntraID, Licensing
 
@@ -33,15 +37,23 @@
 param(
     # ── Connection ──────────────────────────────────────────────────
     [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
     [string]$TenantId,
 
-    [Parameter(ParameterSetName = 'AppAuth')]
+    # Application (client) ID. Required for app-secret auth and certificate auth.
+    [Parameter(Mandatory, ParameterSetName = 'AppAuth')]
+    [Parameter(Mandatory, ParameterSetName = 'CertAuth')]
+    [ValidateNotNullOrEmpty()]
     [string]$ClientId,
 
-    [Parameter(ParameterSetName = 'AppAuth')]
+    # Client secret for app-secret authentication.
+    [Parameter(Mandatory, ParameterSetName = 'AppAuth')]
+    [ValidateNotNullOrEmpty()]
     [string]$ClientSecret,
 
-    [Parameter(ParameterSetName = 'CertAuth')]
+    # Certificate thumbprint from Cert:\CurrentUser\My or Cert:\LocalMachine\My.
+    [Parameter(Mandatory, ParameterSetName = 'CertAuth')]
+    [ValidateNotNullOrEmpty()]
     [string]$CertificateThumbprint,
 
     # ── Scope ───────────────────────────────────────────────────────
@@ -65,6 +77,9 @@ param(
     # ── Options ─────────────────────────────────────────────────────
     [switch]$IncludeEvidence,
     [switch]$IncludeAIExplainer,
+    [string]$AIApiKey,
+    [ValidateSet('Auto', 'Claude', 'OpenAI')]
+    [string]$AIProvider = 'Auto',
     [switch]$SkipBanner,
 
     [ValidateSet('Debug', 'Info', 'Warning', 'Error')]
@@ -102,6 +117,22 @@ Import-Module $riskAnalyzerPath -Force
 Import-Module $reportPath -Force
 Import-Module $evidencePath -Force
 Import-Module $aiExplainerPath -Force
+
+function Format-TiTCSummaryCell {
+    param(
+        [AllowNull()]
+        [string]$Value,
+        [int]$Width
+    )
+
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value.Length -gt $Width) {
+        if ($Width -le 3) { return $Value.Substring(0, $Width) }
+        return $Value.Substring(0, $Width - 3) + '...'
+    }
+
+    return $Value.PadRight($Width)
+}
 
 # ============================================================================
 # BANNER
@@ -184,10 +215,16 @@ $connectParams = @{ TenantId = $TenantId }
 
 switch ($PSCmdlet.ParameterSetName) {
     'AppAuth' {
+        if ([string]::IsNullOrWhiteSpace($ClientId) -or [string]::IsNullOrWhiteSpace($ClientSecret)) {
+            throw "AppAuth requires TenantId, ClientId, and ClientSecret."
+        }
         $connectParams.ClientId = $ClientId
         $connectParams.ClientSecret = $ClientSecret
     }
     'CertAuth' {
+        if ([string]::IsNullOrWhiteSpace($ClientId) -or [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+            throw "CertAuth requires TenantId, ClientId, and CertificateThumbprint."
+        }
         $connectParams.ClientId = $ClientId
         $connectParams.CertificateThumbprint = $CertificateThumbprint
     }
@@ -372,16 +409,19 @@ if ($OutputFormat -in @('HTML', 'PDF', 'All')) {
             RiskAnalysis      = $riskAnalysis
             ExecutiveSummary  = $summary
         }
-        $reportFormat = if ($OutputFormat -eq 'All') { 'PDF' } else { $OutputFormat }
+        $reportFormat = if ($OutputFormat -eq 'All') { 'Both' } else { $OutputFormat }
         $reportBasePath = Join-Path $OutputPath 'report\security-assessment-report'
+        $reportCompanyName = if ($config.Output.BrandingCompanyName) { $config.Output.BrandingCompanyName } else { 'TakeItToCloud' }
         New-Item -ItemType Directory -Path (Join-Path $OutputPath 'report') -Force | Out-Null
 
         $reportFile = Export-TiTCReport `
             -AssessmentData $assessmentData `
             -OutputPath $reportBasePath `
             -Format $reportFormat `
-            -CompanyName (if ($config.Output.BrandingCompanyName) { $config.Output.BrandingCompanyName } else { 'TakeItToCloud' }) `
-            -LogoPath $BrandingLogo
+            -CompanyName $reportCompanyName `
+            -LogoPath $BrandingLogo `
+            -ReportType 'Snapshot' `
+            -PreparedBy $reportCompanyName
 
         Write-TiTCLog "Report generated: $reportFile" -Level Success -Component 'Snapshot'
     }
@@ -393,10 +433,16 @@ if ($OutputFormat -in @('HTML', 'PDF', 'All')) {
 # Export evidence packs if requested
 if ($config.Output.IncludeEvidence) {
     try {
+        $evidenceFrameworks = if ($config.ComplianceFrameworks -and $config.ComplianceFrameworks.Count -gt 0) {
+            $config.ComplianceFrameworks
+        } else {
+            @('ISO27001', 'SOC2Lite', 'CyberInsurance')
+        }
+
         $evidencePackPath = Export-TiTCEvidencePack `
             -Report $report `
             -OutputPath $OutputPath `
-            -Frameworks @('All')
+            -Frameworks $evidenceFrameworks
         Write-TiTCLog "Evidence packs exported to: $evidencePackPath" -Level Success -Component 'Snapshot'
     }
     catch {
@@ -408,11 +454,16 @@ if ($config.Output.IncludeEvidence) {
 if ($IncludeAIExplainer) {
     try {
         Write-TiTCLog "Running AI Explainer on findings..." -Level Info -Component 'Snapshot'
-        $enrichedFindings = Invoke-TiTCAIExplainer `
-            -Findings $report.AllFindings `
-            -Provider 'Claude' `
-            -HighSeverityOnly `
-            -MaxFindings 20
+        $aiExplainerParams = @{
+            Findings         = $report.AllFindings
+            Provider         = $AIProvider
+            HighSeverityOnly = $true
+            MaxFindings      = 20
+        }
+        if ($AIApiKey) {
+            $aiExplainerParams.ApiKey = $AIApiKey
+        }
+        $enrichedFindings = Invoke-TiTCAIExplainer @aiExplainerParams
 
         # Save enriched findings
         $enrichedPath = Join-Path $OutputPath 'findings-ai-enriched.json'
@@ -435,11 +486,17 @@ Write-Host ""
 Write-Host "  ┌─────────────────────────────────────────────────────────┐" -ForegroundColor Green
 Write-Host "  │           ASSESSMENT COMPLETE                           │" -ForegroundColor Green
 Write-Host "  ├─────────────────────────────────────────────────────────┤" -ForegroundColor Green
-Write-Host "  │  Tenant:    $($report.TenantName.PadRight(42))│" -ForegroundColor White
-Write-Host "  │  Score:     $("$($summary.OverallScore)/100 ($($summary.OverallRating))".PadRight(42))│" -ForegroundColor $(if ($summary.OverallScore -gt 60) { 'Red' } elseif ($summary.OverallScore -gt 30) { 'Yellow' } else { 'Green' })
-Write-Host "  │  Findings:  $("$($summary.TotalFindings) total ($($summary.CriticalFindings) critical, $($summary.HighFindings) high)".PadRight(42))│" -ForegroundColor White
-Write-Host "  │  Duration:  $("$([Math]::Round($report.TotalDurationSeconds, 1)) seconds".PadRight(42))│" -ForegroundColor White
-Write-Host "  │  Output:    $($OutputPath.PadRight(42))│" -ForegroundColor White
+$summaryTenant = Format-TiTCSummaryCell -Value $report.TenantName -Width 42
+$summaryScore = Format-TiTCSummaryCell -Value "$($summary.OverallScore)/100 ($($summary.OverallRating))" -Width 42
+$summaryFindings = Format-TiTCSummaryCell -Value "$($summary.TotalFindings) total ($($summary.CriticalFindings) critical, $($summary.HighFindings) high)" -Width 42
+$summaryDuration = Format-TiTCSummaryCell -Value "$([Math]::Round($report.TotalDurationSeconds, 1)) seconds" -Width 42
+$summaryOutput = Format-TiTCSummaryCell -Value $OutputPath -Width 42
+$summaryScoreColor = if ($summary.OverallScore -gt 60) { 'Red' } elseif ($summary.OverallScore -gt 30) { 'Yellow' } else { 'Green' }
+Write-Host "  │  Tenant:    $summaryTenant│" -ForegroundColor White
+Write-Host "  │  Score:     $summaryScore│" -ForegroundColor $summaryScoreColor
+Write-Host "  │  Findings:  $summaryFindings│" -ForegroundColor White
+Write-Host "  │  Duration:  $summaryDuration│" -ForegroundColor White
+Write-Host "  │  Output:    $summaryOutput│" -ForegroundColor White
 Write-Host "  └─────────────────────────────────────────────────────────┘" -ForegroundColor Green
 Write-Host ""
 

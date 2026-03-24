@@ -57,8 +57,10 @@ function Test-Prerequisites {
     # PowerShell version
     $psVer = $PSVersionTable.PSVersion.ToString()
     $psOk  = $PSVersionTable.PSVersion.Major -ge 5
-    Write-Host ("  {0,-16}{1,-45}{2}" -f 'PowerShell:', $psVer, (if ($psOk) { '✓' } else { '✗' })) `
-        -ForegroundColor (if ($psOk) { 'Green' } else { 'Red' })
+    $psStatusSymbol = if ($psOk) { '✓' } else { '✗' }
+    $psStatusColor  = if ($psOk) { 'Green' } else { 'Red' }
+    Write-Host ("  {0,-16}{1,-45}{2}" -f 'PowerShell:', $psVer, $psStatusSymbol) `
+        -ForegroundColor $psStatusColor
 
     # Required and optional modules
     $modules = @(
@@ -72,30 +74,37 @@ function Test-Prerequisites {
 
     foreach ($mod in $modules) {
         $installed = Get-Module -ListAvailable -Name $mod.Name | Sort-Object Version -Descending | Select-Object -First 1
+        $moduleLabel = '{0}:' -f $mod.Name
         if ($installed) {
-            Write-Host ("  {0,-16}{1,-45}{2}" -f "$($mod.Name):", "v$($installed.Version)", '✓') -ForegroundColor Green
+            $moduleVersion = 'v{0}' -f $installed.Version
+            Write-Host ("  {0,-16}{1,-45}{2}" -f $moduleLabel, $moduleVersion, '✓') -ForegroundColor Green
         } elseif ($mod.Required) {
             $allRequiredMet = $false
-            Write-Host ("  {0,-16}{1,-45}{2}" -f "$($mod.Name):", 'Not installed (REQUIRED)', '✗') -ForegroundColor Red
+            Write-Host ("  {0,-16}{1,-45}{2}" -f $moduleLabel, 'Not installed (REQUIRED)', '✗') -ForegroundColor Red
             $install = Read-Host "  Install $($mod.Name) now? (Y/N)"
             if ($install -eq 'Y') {
-                Write-Host "  Installing $($mod.Name)..." -ForegroundColor Cyan
+                $installMessage = '  Installing {0}...' -f $mod.Name
+                Write-Host $installMessage -ForegroundColor Cyan
                 try {
                     Install-Module -Name $mod.Name -Scope CurrentUser -Force -AllowClobber
-                    Write-Host "  $($mod.Name) installed." -ForegroundColor Green
+                    $installedMessage = '  {0} installed.' -f $mod.Name
+                    Write-Host $installedMessage -ForegroundColor Green
                     $allRequiredMet = $true
                 } catch {
                     Write-Host "  Install failed: $_" -ForegroundColor Red
                 }
             }
         } else {
-            Write-Host ("  {0,-16}{1,-45}{2}" -f "$($mod.Name):", "Not installed — $($mod.Purpose)", '⚠') -ForegroundColor Yellow
+            $modulePurpose = 'Not installed — {0}' -f $mod.Purpose
+            Write-Host ("  {0,-16}{1,-45}{2}" -f $moduleLabel, $modulePurpose, '⚠') -ForegroundColor Yellow
             $install = Read-Host "  Install $($mod.Name) now? (Y/N)"
             if ($install -eq 'Y') {
-                Write-Host "  Installing $($mod.Name)..." -ForegroundColor Cyan
+                $installMessage = '  Installing {0}...' -f $mod.Name
+                Write-Host $installMessage -ForegroundColor Cyan
                 try {
                     Install-Module -Name $mod.Name -Scope CurrentUser -Force -AllowClobber
-                    Write-Host "  $($mod.Name) installed." -ForegroundColor Green
+                    $installedMessage = '  {0} installed.' -f $mod.Name
+                    Write-Host $installedMessage -ForegroundColor Green
                 } catch {
                     Write-Host "  Install failed: $_" -ForegroundColor Red
                 }
@@ -138,23 +147,154 @@ function Test-Prerequisites {
 # AI KEY HELPER
 # ============================================================================
 
-function Get-AIApiKey {
-    $aiKey = if ($env:ANTHROPIC_API_KEY) { $env:ANTHROPIC_API_KEY } elseif ($env:OPENAI_API_KEY) { $env:OPENAI_API_KEY } else { $null }
+function Read-AuditXpertSecureText {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Prompt
+    )
 
-    if (-not $aiKey) {
-        Write-Host ""
-        Write-Host "  AI Explainer requires an API key." -ForegroundColor Yellow
-        Write-Host "  Get one at: https://console.anthropic.com/settings/keys" -ForegroundColor DarkGray
-        Write-Host ""
-        $aiKey = Read-Host "  Enter Anthropic API key (or press Enter to skip AI Explainer)"
-        if ($aiKey) {
-            $env:ANTHROPIC_API_KEY = $aiKey
-        } else {
-            $aiKey = $null
+    $secureText = Read-Host $Prompt -AsSecureString
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureText)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+function Get-AIApiKey {
+    $anthropicKey = $env:ANTHROPIC_API_KEY
+    $openaiKey = $env:OPENAI_API_KEY
+    $anthropicStatus = if ($anthropicKey) { 'Available (Claude)' } else { 'Not set' }
+    $openaiStatus = if ($openaiKey) { 'Available (OpenAI)' } else { 'Not set' }
+    $anthropicColor = if ($anthropicKey) { 'Green' } else { 'DarkGray' }
+    $openaiColor = if ($openaiKey) { 'Green' } else { 'DarkGray' }
+
+    Write-Host ""
+    Write-Host "  AI Explainer configuration:" -ForegroundColor Cyan
+    Write-Host ("  {0,-18}{1}" -f 'ANTHROPIC_API_KEY:', $anthropicStatus) -ForegroundColor $anthropicColor
+    Write-Host ("  {0,-18}{1}" -f 'OPENAI_API_KEY:', $openaiStatus) -ForegroundColor $openaiColor
+    Write-Host ""
+    Write-Host "  [1] Use existing environment variable" -ForegroundColor White
+    Write-Host "      Uses ANTHROPIC_API_KEY or OPENAI_API_KEY if already set." -ForegroundColor DarkGray
+    Write-Host "  [2] Enter OpenAI API key for this session" -ForegroundColor White
+    Write-Host "      Stores the key in memory only for this launcher run." -ForegroundColor DarkGray
+    Write-Host "  [3] Enter Anthropic API key for this session" -ForegroundColor White
+    Write-Host "      Stores the key in memory only for this launcher run." -ForegroundColor DarkGray
+    Write-Host "  [4] Skip AI explainer" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $defaultChoice = if ($anthropicKey -or $openaiKey) { '1' } else { '4' }
+    $choice = Read-Host "  Select AI configuration (1-4) [$defaultChoice]"
+    if (-not $choice.Trim()) { $choice = $defaultChoice }
+
+    switch ($choice.Trim()) {
+        '1' {
+            if ($anthropicKey -or $openaiKey) {
+                if ($anthropicKey -and -not $openaiKey) {
+                    return [PSCustomObject]@{
+                        Enabled  = $true
+                        Provider = 'Claude'
+                        ApiKey   = $anthropicKey
+                        Source   = 'Environment'
+                        Status   = 'AI: Claude key loaded from environment'
+                    }
+                }
+
+                if ($openaiKey -and -not $anthropicKey) {
+                    return [PSCustomObject]@{
+                        Enabled  = $true
+                        Provider = 'OpenAI'
+                        ApiKey   = $openaiKey
+                        Source   = 'Environment'
+                        Status   = 'AI: OpenAI key loaded from environment'
+                    }
+                }
+
+                Write-Host ""
+                Write-Host "  Both environment variables are set." -ForegroundColor Cyan
+                Write-Host "  [1] Use ANTHROPIC_API_KEY (Claude)" -ForegroundColor White
+                Write-Host "  [2] Use OPENAI_API_KEY (OpenAI)" -ForegroundColor White
+                Write-Host ""
+                $envChoice = Read-Host "  Select environment key (1-2) [1]"
+                if (-not $envChoice.Trim()) { $envChoice = '1' }
+
+                if ($envChoice.Trim() -eq '2') {
+                    return [PSCustomObject]@{
+                        Enabled  = $true
+                        Provider = 'OpenAI'
+                        ApiKey   = $openaiKey
+                        Source   = 'Environment'
+                        Status   = 'AI: OpenAI key loaded from environment'
+                    }
+                }
+
+                return [PSCustomObject]@{
+                    Enabled  = $true
+                    Provider = 'Claude'
+                    ApiKey   = $anthropicKey
+                    Source   = 'Environment'
+                    Status   = 'AI: Claude key loaded from environment'
+                }
+            }
+
+            Write-Host "  No AI environment variable is set. Select option 2 or 3 to enter a session key, or 4 to skip AI." -ForegroundColor Yellow
+            return [PSCustomObject]@{
+                Enabled  = $false
+                Provider = $null
+                ApiKey   = $null
+                Source   = 'Disabled'
+                Status   = 'AI: disabled'
+            }
+        }
+        '2' {
+            $provider = 'OpenAI'
+        }
+        '3' {
+            $provider = 'Claude'
+        }
+        '4' {
+            return [PSCustomObject]@{
+                Enabled  = $false
+                Provider = $null
+                ApiKey   = $null
+                Source   = 'Disabled'
+                Status   = 'AI: disabled'
+            }
+        }
+        default {
+            return [PSCustomObject]@{
+                Enabled  = $false
+                Provider = $null
+                ApiKey   = $null
+                Source   = 'Disabled'
+                Status   = 'AI: disabled'
+            }
         }
     }
 
-    return $aiKey
+    Write-Host ""
+    Write-Host "  Enter a $provider API key securely for this session, or press Enter to keep AI disabled." -ForegroundColor DarkGray
+    $apiKey = Read-AuditXpertSecureText -Prompt "  Enter $provider API key for this session"
+
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        return [PSCustomObject]@{
+            Enabled  = $false
+            Provider = $null
+            ApiKey   = $null
+            Source   = 'Disabled'
+            Status   = 'AI: disabled'
+        }
+    }
+
+    return [PSCustomObject]@{
+        Enabled  = $true
+        Provider = $provider
+        ApiKey   = $apiKey
+        Source   = 'Session'
+        Status   = if ($provider -eq 'OpenAI') { 'AI: OpenAI key loaded for this session' } else { 'AI: Claude key loaded for this session' }
+    }
 }
 
 # ============================================================================
@@ -201,11 +341,13 @@ function Test-AuditXpertPreFlight {
             Write-Host "  Run Option 4 to create a new App Registration and Certificate." -ForegroundColor Yellow
             $ready = $false
         } elseif ($cert.NotAfter -lt (Get-Date)) {
-            Write-Host "  ✗ Certificate expired on $($cert.NotAfter.ToString('yyyy-MM-dd'))." -ForegroundColor Red
+            $certExpiryDate = $cert.NotAfter.ToString('yyyy-MM-dd')
+            Write-Host "  ✗ Certificate expired on $certExpiryDate." -ForegroundColor Red
             $ready = $false
         } elseif ($cert.NotAfter -lt (Get-Date).AddDays(30)) {
             $daysLeft = [Math]::Round(($cert.NotAfter - (Get-Date)).TotalDays)
-            Write-Host "  ⚠ Certificate expires in $daysLeft days ($($cert.NotAfter.ToString('yyyy-MM-dd')))." -ForegroundColor Yellow
+            $certExpiryDate = $cert.NotAfter.ToString('yyyy-MM-dd')
+            Write-Host "  ⚠ Certificate expires in $daysLeft days ($certExpiryDate)." -ForegroundColor Yellow
         }
     }
 
@@ -220,6 +362,102 @@ function Get-SavedAppConfigs {
     $certDir = Join-Path $scriptRoot 'certs'
     $configs  = @(Get-ChildItem $certDir -Filter '*-config.json' -ErrorAction SilentlyContinue)
     return $configs
+}
+
+function Format-AuditXpertCell {
+    param(
+        [AllowNull()]
+        [string]$Value,
+        [int]$Width
+    )
+
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value.Length -gt $Width) {
+        if ($Width -le 3) { return $Value.Substring(0, $Width) }
+        return $Value.Substring(0, $Width - 3) + '...'
+    }
+
+    return $Value.PadRight($Width)
+}
+
+function New-SnapshotLaunchParams {
+    param(
+        [hashtable]$AuthParams,
+        [string]$OutputPath,
+        [bool]$IncludeAIExplainer,
+        [string]$AIApiKey,
+        [string]$AIProvider
+    )
+
+    $params = @{
+        TenantId        = $AuthParams.TenantId
+        Profile         = 'Full'
+        OutputFormat    = 'HTML'
+        IncludeEvidence = $true
+        OutputPath      = $OutputPath
+        SkipBanner      = $true
+    }
+
+    if ($AuthParams.ContainsKey('ClientId')) {
+        $params.ClientId = $AuthParams.ClientId
+    }
+    if ($AuthParams.ContainsKey('ClientSecret')) {
+        $params.ClientSecret = $AuthParams.ClientSecret
+    }
+    if ($AuthParams.ContainsKey('CertificateThumbprint')) {
+        $params.CertificateThumbprint = $AuthParams.CertificateThumbprint
+    }
+    if ($IncludeAIExplainer) {
+        $params.IncludeAIExplainer = $true
+        if ($AIApiKey) {
+            $params.AIApiKey = $AIApiKey
+        }
+        if ($AIProvider) {
+            $params.AIProvider = $AIProvider
+        }
+    }
+
+    return $params
+}
+
+function New-MSPLaunchParams {
+    param(
+        [hashtable]$AuthParams,
+        [string]$OutputPath,
+        [bool]$IncludeAIExplainer,
+        [string]$MSPCompanyName,
+        [string]$AIApiKey,
+        [string]$AIProvider
+    )
+
+    $params = @{
+        TenantId       = $AuthParams.TenantId
+        MSPCompanyName = $MSPCompanyName
+        AuditPacks     = @('ISO27001', 'CyberInsurance', 'SOC2Lite')
+        OutputPath     = $OutputPath
+        ReportFormat   = 'HTML'
+    }
+
+    if ($AuthParams.ContainsKey('ClientId')) {
+        $params.ClientId = $AuthParams.ClientId
+    }
+    if ($AuthParams.ContainsKey('ClientSecret')) {
+        $params.ClientSecret = $AuthParams.ClientSecret
+    }
+    if ($AuthParams.ContainsKey('CertificateThumbprint')) {
+        $params.CertificateThumbprint = $AuthParams.CertificateThumbprint
+    }
+    if ($IncludeAIExplainer) {
+        $params.IncludeAIExplainer = $true
+        if ($AIApiKey) {
+            $params.AIApiKey = $AIApiKey
+        }
+        if ($AIProvider) {
+            $params.AIProvider = $AIProvider
+        }
+    }
+
+    return $params
 }
 
 # ============================================================================
@@ -248,14 +486,14 @@ function Show-AssessmentSubMenu {
         New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
     }
 
-    # AI key
-    $aiKey = Get-AIApiKey
+    # AI configuration
+    $aiSettings = Get-AIApiKey
 
     # Sub-menu
     Write-Host ""
     Write-Host "  ═══ Select Assessment Type ═══" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  [1] Full Assessment (Snapshot + MSP Pack + AI Explainer)" -ForegroundColor White
+    Write-Host "  [1] Full Assessment (Snapshot + MSP Pack + optional AI Explainer)" -ForegroundColor White
     Write-Host "  [2] M365 Risk Snapshot only" -ForegroundColor White
     Write-Host "  [3] MSP Audit Pack only" -ForegroundColor White
     Write-Host "  [4] Back to main menu" -ForegroundColor DarkGray
@@ -264,18 +502,11 @@ function Show-AssessmentSubMenu {
 
     if ($subChoice -eq '4' -or -not $subChoice.Trim()) { return }
 
-    # Build common params
-    $commonParams = @{}
-    foreach ($k in $AuthParams.Keys) { $commonParams[$k] = $AuthParams[$k] }
-    $commonParams.Profile        = 'Full'
-    $commonParams.OutputFormat   = 'HTML'
-    $commonParams.IncludeEvidence = $true
-    $commonParams.OutputPath     = $outputPath
-    $commonParams.SkipBanner     = $true
+    $includeAIExplainer = [bool]$aiSettings.Enabled
 
-    if ($aiKey) {
-        $commonParams.IncludeAIExplainer = $true
-    }
+    $aiStatusLine = if ($aiSettings.Status) { $aiSettings.Status } else { 'AI: disabled' }
+    $aiStatusColor = if ($includeAIExplainer) { 'Green' } else { 'DarkGray' }
+    Write-Host "  $aiStatusLine" -ForegroundColor $aiStatusColor
 
     # Pre-flight
     $authMethod = if ($AuthParams.ContainsKey('CertificateThumbprint')) { 'Certificate' } else { 'Interactive' }
@@ -296,26 +527,28 @@ function Show-AssessmentSubMenu {
 
     switch ($subChoice.Trim()) {
         '1' {
-            # Full: Snapshot then MSP Pack
+            # Full: Snapshot + MSP Pack in separate subfolders
+            $snapshotOutput = Join-Path $outputPath 'snapshot'
+            $mspOutput      = Join-Path $outputPath 'msp-pack'
+
             Write-Host ""
             Write-Host "  Running M365 Risk Snapshot..." -ForegroundColor Cyan
-            $snapshotReport = & $snapshotPath @commonParams
+            $snapshotParams = New-SnapshotLaunchParams -AuthParams $AuthParams -OutputPath $snapshotOutput -IncludeAIExplainer $includeAIExplainer -AIApiKey $aiSettings.ApiKey -AIProvider $aiSettings.Provider
+            $snapshotReport = & $snapshotPath @snapshotParams
 
             $mspName = Read-Host "`n  MSP Company Name [TakeItToCloud]"
             if (-not $mspName.Trim()) { $mspName = 'TakeItToCloud' }
 
             Write-Host ""
             Write-Host "  Running MSP Audit Pack..." -ForegroundColor Cyan
-            $mspParams = @{}
-            foreach ($k in $commonParams.Keys) { $mspParams[$k] = $commonParams[$k] }
-            $mspParams.MSPCompanyName = $mspName
-            $mspParams.AuditPacks     = @('ISO27001', 'CyberInsurance', 'SOC2Lite')
+            $mspParams = New-MSPLaunchParams -AuthParams $AuthParams -OutputPath $mspOutput -IncludeAIExplainer $includeAIExplainer -MSPCompanyName $mspName -AIApiKey $aiSettings.ApiKey -AIProvider $aiSettings.Provider
             & $mspPackPath @mspParams
         }
         '2' {
             Write-Host ""
             Write-Host "  Running M365 Risk Snapshot..." -ForegroundColor Cyan
-            & $snapshotPath @commonParams
+            $snapshotParams = New-SnapshotLaunchParams -AuthParams $AuthParams -OutputPath $outputPath -IncludeAIExplainer $includeAIExplainer -AIApiKey $aiSettings.ApiKey -AIProvider $aiSettings.Provider
+            & $snapshotPath @snapshotParams
         }
         '3' {
             $mspName = Read-Host "  MSP Company Name [TakeItToCloud]"
@@ -323,10 +556,7 @@ function Show-AssessmentSubMenu {
 
             Write-Host ""
             Write-Host "  Running MSP Audit Pack..." -ForegroundColor Cyan
-            $mspParams = @{}
-            foreach ($k in $commonParams.Keys) { $mspParams[$k] = $commonParams[$k] }
-            $mspParams.MSPCompanyName = $mspName
-            $mspParams.AuditPacks     = @('ISO27001', 'CyberInsurance', 'SOC2Lite')
+            $mspParams = New-MSPLaunchParams -AuthParams $AuthParams -OutputPath $outputPath -IncludeAIExplainer $includeAIExplainer -MSPCompanyName $mspName -AIApiKey $aiSettings.ApiKey -AIProvider $aiSettings.Provider
             & $mspPackPath @mspParams
         }
     }
@@ -340,14 +570,29 @@ function Show-AssessmentSubMenu {
     Write-Host "  ═══ Assessment Complete ═══" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Duration:   ${mins}m ${secs}s" -ForegroundColor White
-    Write-Host "  Output:     $outputPath" -ForegroundColor White
 
-    $reportHtmlPath = Join-Path $outputPath 'report\security-assessment-report.html'
-    if (Test-Path $reportHtmlPath) {
-        Write-Host ""
-        $open = Read-Host "  Open report in browser? (Y/N)"
-        if ($open.Trim().ToUpper() -eq 'Y') {
-            Start-Process $reportHtmlPath
+    # For Full Assessment the two products write to separate subfolders
+    if ($subChoice.Trim() -eq '1') {
+        Write-Host "  Snapshot:   $snapshotOutput" -ForegroundColor White
+        Write-Host "  MSP Pack:   $mspOutput"      -ForegroundColor White
+        $reportHtmlPath = Join-Path $snapshotOutput 'report\security-assessment-report.html'
+        $mspReportPath  = Join-Path $mspOutput      'report\security-assessment-report.html'
+        if (Test-Path $mspReportPath) {
+            Write-Host ""
+            $open = Read-Host "  Open MSP report in browser? (Y/N)"
+            if ($open.Trim().ToUpper() -eq 'Y') { Start-Process $mspReportPath }
+        } elseif (Test-Path $reportHtmlPath) {
+            Write-Host ""
+            $open = Read-Host "  Open snapshot report in browser? (Y/N)"
+            if ($open.Trim().ToUpper() -eq 'Y') { Start-Process $reportHtmlPath }
+        }
+    } else {
+        Write-Host "  Output:     $outputPath" -ForegroundColor White
+        $reportHtmlPath = Join-Path $outputPath 'report\security-assessment-report.html'
+        if (Test-Path $reportHtmlPath) {
+            Write-Host ""
+            $open = Read-Host "  Open report in browser? (Y/N)"
+            if ($open.Trim().ToUpper() -eq 'Y') { Start-Process $reportHtmlPath }
         }
     }
 
@@ -367,8 +612,7 @@ function Start-InteractiveAssessment {
     if (-not $tenantId.Trim()) { return }
 
     $authParams = @{
-        TenantId    = $tenantId.Trim()
-        Interactive = $true
+        TenantId = $tenantId.Trim()
     }
 
     Show-AssessmentSubMenu -AuthParams $authParams
@@ -393,14 +637,17 @@ function Start-CertificateAssessment {
         Write-Host ""
         Write-Host "  Saved app configurations found:" -ForegroundColor Cyan
         for ($i = 0; $i -lt $configs.Count; $i++) {
+            $configIndex = $i + 1
             try {
                 $data = Get-Content $configs[$i].FullName | ConvertFrom-Json
-                Write-Host ("  [{0}] {1}  (App: {2}, Cert expires: {3})" -f ($i+1), $data.TenantId, $data.ClientId, $data.CertificateExpiry) -ForegroundColor White
+                Write-Host ("  [{0}] {1}  (App: {2}, Cert expires: {3})" -f $configIndex, $data.TenantId, $data.ClientId, $data.CertificateExpiry) -ForegroundColor White
             } catch {
-                Write-Host "  [$($i+1)] $($configs[$i].Name) (could not parse)" -ForegroundColor DarkGray
+                $configName = $configs[$i].Name
+                Write-Host "  [$configIndex] $configName (could not parse)" -ForegroundColor DarkGray
             }
         }
-        Write-Host "  [$($configs.Count + 1)] Enter credentials manually" -ForegroundColor DarkGray
+        $manualEntryIndex = $configs.Count + 1
+        Write-Host "  [$manualEntryIndex] Enter credentials manually" -ForegroundColor DarkGray
         Write-Host ""
         $selection = Read-Host "  Select (1-$($configs.Count + 1))"
 
@@ -421,20 +668,22 @@ function Start-CertificateAssessment {
                 }
 
                 if (-not $cert) {
+                    $selectedPfxPath = $selectedConfig.PfxPath
                     Write-Host ""
                     Write-Host "  ✗ Certificate not found in local store!" -ForegroundColor Red
-                    Write-Host "  Import the PFX from: $($selectedConfig.PfxPath)" -ForegroundColor Yellow
-                    Write-Host "  Command: Import-PfxCertificate -FilePath '$($selectedConfig.PfxPath)' -CertStoreLocation Cert:\CurrentUser\My" -ForegroundColor DarkGray
+                    Write-Host "  Import the PFX from: $selectedPfxPath" -ForegroundColor Yellow
+                    Write-Host "  Command: Import-PfxCertificate -FilePath '$selectedPfxPath' -CertStoreLocation Cert:\CurrentUser\My" -ForegroundColor DarkGray
                     Write-Host ""
                     Read-Host "  Press Enter to return to menu"
                     return
                 }
 
+                $certExpiryDate = $cert.NotAfter.ToString('yyyy-MM-dd')
                 Write-Host ""
                 Write-Host "  Certificate found:" -ForegroundColor Green
                 Write-Host "    Subject:    $($cert.Subject)" -ForegroundColor White
                 Write-Host "    Thumbprint: $($cert.Thumbprint)" -ForegroundColor White
-                Write-Host "    Expires:    $($cert.NotAfter.ToString('yyyy-MM-dd'))" -ForegroundColor White
+                Write-Host "    Expires:    $certExpiryDate" -ForegroundColor White
                 $storeDisplay = if ($cert.PSParentPath -match 'LocalMachine') { 'LocalMachine\My' } else { 'CurrentUser\My' }
                 Write-Host "    Store:      $storeDisplay" -ForegroundColor White
                 Write-Host ""
@@ -479,11 +728,12 @@ function Start-CertificateAssessment {
             return
         }
 
+        $certExpiryDate = $cert.NotAfter.ToString('yyyy-MM-dd')
         Write-Host ""
         Write-Host "  Certificate found:" -ForegroundColor Green
         Write-Host "    Subject:    $($cert.Subject)" -ForegroundColor White
         Write-Host "    Thumbprint: $($cert.Thumbprint)" -ForegroundColor White
-        Write-Host "    Expires:    $($cert.NotAfter.ToString('yyyy-MM-dd'))" -ForegroundColor White
+        Write-Host "    Expires:    $certExpiryDate" -ForegroundColor White
         $storeDisplay = if ($cert.PSParentPath -match 'LocalMachine') { 'LocalMachine\My' } else { 'CurrentUser\My' }
         Write-Host "    Store:      $storeDisplay" -ForegroundColor White
         Write-Host ""
@@ -735,12 +985,12 @@ function New-AuditXpertAppRegistration {
     Write-Host "  Config saved: $configPath" -ForegroundColor DarkGray
 
     # ── Step 10: Summary ───────────────────────────────────────────────────
-    $tidPad   = $TenantId.PadRight(39)
-    $appPad   = $AppDisplayName.PadRight(39)
-    $cidPad   = $app.AppId.PadRight(39)
-    $thumbPad = $cert.Thumbprint.PadRight(39)
-    $expPad   = $certExpiry.ToString('yyyy-MM-dd').PadRight(39)
-    $cfgPad   = $configPath.PadRight(39)
+    $tidPad   = Format-AuditXpertCell -Value $TenantId -Width 39
+    $appPad   = Format-AuditXpertCell -Value $AppDisplayName -Width 39
+    $cidPad   = Format-AuditXpertCell -Value $app.AppId -Width 39
+    $thumbPad = Format-AuditXpertCell -Value $cert.Thumbprint -Width 39
+    $expPad   = Format-AuditXpertCell -Value $certExpiry.ToString('yyyy-MM-dd') -Width 39
+    $cfgPad   = Format-AuditXpertCell -Value $configPath -Width 39
 
     Write-Host ""
     Write-Host "  ┌─────────────────────────────────────────────────────────┐" -ForegroundColor Green

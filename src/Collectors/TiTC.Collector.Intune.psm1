@@ -95,6 +95,17 @@ function Invoke-TiTCIntuneCollector {
     }
 
     $runAll = $Checks -contains 'All'
+    $checkSupport = [ordered]@{
+        'DeviceCompliance'     = 'PartiallySupported'
+        'CompliancePolicies'   = 'PartiallySupported'
+        'EncryptionStatus'     = 'PartiallySupported'
+        'OSUpdateCompliance'   = 'PartiallySupported'
+        'StaleDevices'         = 'PartiallySupported'
+        'AppProtection'        = 'PartiallySupported'
+        'SecurityBaselines'    = 'PartiallySupported'
+        'DeviceConfigProfiles' = 'PartiallySupported'
+    }
+    Initialize-TiTCCollectorCheckCatalog -Result $result -CheckSupportMap $checkSupport
 
     # ── Assessor dispatch ───────────────────────────────────────────────
     $assessors = [ordered]@{
@@ -112,12 +123,15 @@ function Invoke-TiTCIntuneCollector {
         if ($runAll -or $Checks -contains $assessorName) {
             try {
                 Write-TiTCLog "Running check: $assessorName" -Level Info -Component $script:COMPONENT
+                $findingsBefore = @($result.Findings).Count
                 & $assessors[$assessorName]
+                Complete-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -FindingsBefore $findingsBefore
             }
             catch {
                 $errorMsg = "Check '$assessorName' failed: $($_.Exception.Message)"
                 Write-TiTCLog $errorMsg -Level Error -Component $script:COMPONENT
                 $result.Errors += $errorMsg
+                Set-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -Status Failed -Reason $errorMsg -Support $checkSupport[$assessorName]
 
                 if ($result.Status -eq 'Success') {
                     $result.Status = 'PartialSuccess'
@@ -126,6 +140,7 @@ function Invoke-TiTCIntuneCollector {
         }
     }
 
+    Finalize-TiTCCollectorOutcome -Result $result
     $result.Complete()
 
     $summary = $result.ToSummary()
@@ -160,6 +175,7 @@ function Test-TiTCDeviceCompliance {
 
     if ($devices.Count -eq 0) {
         Write-TiTCLog "No managed devices found — Intune may not be licensed or configured" -Level Warning -Component $script:COMPONENT
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'DeviceCompliance' -Status SkippedFeatureUnavailable -Reason 'No managed devices found. Intune may not be licensed, configured, or in scope for this tenant.' -Support 'PartiallySupported'
         return
     }
 
@@ -457,6 +473,7 @@ function Test-TiTCOSUpdateCompliance {
             -Component $script:COMPONENT
         ).value
     }
+    $devices = @($devices)
 
     # Get Windows Update for Business rings (filter client-side — @odata.type not supported in $filter)
     $updateRings = @()
@@ -476,12 +493,24 @@ function Test-TiTCOSUpdateCompliance {
     $Result.ObjectsScanned += $devices.Count
     $Result.RawData['WindowsUpdateRings'] = $updateRings
 
+    if ($devices.Count -eq 0) {
+        Write-TiTCLog "No managed device data available for OS update compliance analysis" -Level Info -Component $script:COMPONENT
+        $Result.RawData['OutdatedDevices'] = @()
+        return
+    }
+
     # Check for outdated OS versions
     $outdatedDevices = [System.Collections.ArrayList]::new()
+    $devicesMissingOSData = 0
 
     foreach ($device in $devices) {
+        if (-not $device -or [string]::IsNullOrWhiteSpace($device.operatingSystem) -or [string]::IsNullOrWhiteSpace($device.osVersion)) {
+            $devicesMissingOSData++
+            continue
+        }
+
+        if (-not $script:MIN_OS_VERSIONS.ContainsKey($device.operatingSystem)) { continue }
         $minVersion = $script:MIN_OS_VERSIONS[$device.operatingSystem]
-        if (-not $minVersion -or -not $device.osVersion) { continue }
 
         try {
             $deviceVer = [System.Version]$device.osVersion
@@ -503,6 +532,15 @@ function Test-TiTCOSUpdateCompliance {
     }
 
     $Result.RawData['OutdatedDevices'] = $outdatedDevices
+    $Result.RawData['OSUpdateCompliance'] = @{
+        TotalDevices          = $devices.Count
+        DevicesMissingOSData  = $devicesMissingOSData
+        UpdateRingCount       = $updateRings.Count
+    }
+
+    if ($devicesMissingOSData -gt 0) {
+        Write-TiTCLog "$devicesMissingOSData device record(s) were skipped during OS update compliance analysis because operating system or version data was missing." -Level Debug -Component $script:COMPONENT
+    }
 
     if ($outdatedDevices.Count -gt 0) {
         $affectedList = $outdatedDevices | Select-Object -First 50 | ForEach-Object {
@@ -650,6 +688,7 @@ function Test-TiTCAppProtection {
     }
     catch {
         Write-TiTCLog "Could not retrieve MAM policies: $_" -Level Warning -Component $script:COMPONENT
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'AppProtection' -Status SkippedFeatureUnavailable -Reason $_.Exception.Message -Support 'PartiallySupported'
         return
     }
 
@@ -790,6 +829,7 @@ function Test-TiTCSecurityBaselines {
         }
         catch {
             Write-TiTCLog "Fallback baseline check also failed: $_" -Level Debug -Component $script:COMPONENT
+            Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'SecurityBaselines' -Status SkippedFeatureUnavailable -Reason 'Security baseline endpoints were unavailable for this tenant or mode.' -Support 'PartiallySupported'
             return
         }
     }
@@ -866,6 +906,7 @@ function Test-TiTCDeviceConfigProfiles {
     }
     catch {
         Write-TiTCLog "Could not retrieve device configuration profiles: $_" -Level Warning -Component $script:COMPONENT
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'DeviceConfigProfiles' -Status SkippedFeatureUnavailable -Reason $_.Exception.Message -Support 'PartiallySupported'
         return
     }
 

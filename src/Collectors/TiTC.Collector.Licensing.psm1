@@ -105,6 +105,16 @@ function Invoke-TiTCLicensingCollector {
     }
 
     $runAll = $Checks -contains 'All'
+    $checkSupport = [ordered]@{
+        'LicenseInventory'     = 'FullySupported'
+        'UnusedLicenses'       = 'FullySupported'
+        'DuplicateLicenses'    = 'FullySupported'
+        'OverProvisionedUsers' = 'PartiallySupported'
+        'TrialSubscriptions'   = 'FullySupported'
+        'UnlicensedUsers'      = 'FullySupported'
+        'LicenseWasteSummary'  = 'FullySupported'
+    }
+    Initialize-TiTCCollectorCheckCatalog -Result $result -CheckSupportMap $checkSupport
 
     # ── Assessor dispatch ───────────────────────────────────────────────
     $assessors = [ordered]@{
@@ -121,12 +131,15 @@ function Invoke-TiTCLicensingCollector {
         if ($runAll -or $Checks -contains $assessorName) {
             try {
                 Write-TiTCLog "Running check: $assessorName" -Level Info -Component $script:COMPONENT
+                $findingsBefore = @($result.Findings).Count
                 & $assessors[$assessorName]
+                Complete-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -FindingsBefore $findingsBefore
             }
             catch {
                 $errorMsg = "Check '$assessorName' failed: $($_.Exception.Message)"
                 Write-TiTCLog $errorMsg -Level Error -Component $script:COMPONENT
                 $result.Errors += $errorMsg
+                Set-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -Status Failed -Reason $errorMsg -Support $checkSupport[$assessorName]
 
                 if ($result.Status -eq 'Success') {
                     $result.Status = 'PartialSuccess'
@@ -135,6 +148,7 @@ function Invoke-TiTCLicensingCollector {
         }
     }
 
+    Finalize-TiTCCollectorOutcome -Result $result
     $result.Complete()
 
     $summary = $result.ToSummary()
@@ -168,6 +182,7 @@ function Test-TiTCLicenseInventory {
 
     if ($skus.Count -eq 0) {
         Write-TiTCLog "No subscribed SKUs found" -Level Warning -Component $script:COMPONENT
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'LicenseInventory' -Status SkippedFeatureUnavailable -Reason 'No subscribed SKUs were returned by Microsoft Graph.' -Support 'FullySupported'
         return
     }
 

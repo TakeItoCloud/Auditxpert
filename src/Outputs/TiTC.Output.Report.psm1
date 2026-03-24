@@ -76,6 +76,7 @@ function Export-TiTCReport {
 
     .PARAMETER Format
         'HTML' generates a .html file. 'PDF' attempts wkhtmltopdf conversion.
+        'Both' generates both artifacts and returns both paths.
 
     .PARAMETER LogoPath
         Optional path to a logo image file for white-label branding.
@@ -93,11 +94,15 @@ function Export-TiTCReport {
 
         [string]$OutputPath,
 
-        [ValidateSet('HTML', 'PDF')]
+        [ValidateSet('HTML', 'PDF', 'Both')]
         [string]$Format = 'HTML',
 
         [string]$LogoPath,
         [string]$CompanyName = 'TakeItToCloud',
+        [string]$PreparedBy,
+        [string]$PreparedFor,
+        [ValidateSet('Snapshot', 'MSPAuditPack')]
+        [string]$ReportType = 'Snapshot',
         [hashtable]$BrandingColors
     )
 
@@ -113,17 +118,21 @@ function Export-TiTCReport {
         $OutputPath = Join-Path $PWD "TiTC-Report-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     }
 
+    $resolvedPreparedBy = if ($PreparedBy) { $PreparedBy } else { $CompanyName }
+
     $htmlPath = "$OutputPath.html"
 
-    Write-TiTCLog "Generating HTML report: $htmlPath" -Level Info -Component $script:COMPONENT
+    Write-TiTCLog "Generating HTML report ($ReportType): $htmlPath" -Level Info -Component $script:COMPONENT
 
     $html = Build-TiTCReportHTML -AssessmentData $AssessmentData -Colors $colors `
-                                  -CompanyName $CompanyName -LogoPath $LogoPath
+                                  -CompanyName $CompanyName -LogoPath $LogoPath `
+                                  -PreparedBy $resolvedPreparedBy -PreparedFor $PreparedFor `
+                                  -ReportType $ReportType
 
     $html | Set-Content -Path $htmlPath -Encoding UTF8 -Force
     Write-TiTCLog "HTML report saved: $htmlPath" -Level Success -Component $script:COMPONENT
 
-    if ($Format -eq 'PDF') {
+    if ($Format -in @('PDF', 'Both')) {
         $pdfPath = "$OutputPath.pdf"
         $wk = Get-Command wkhtmltopdf -ErrorAction SilentlyContinue
         if ($wk) {
@@ -135,10 +144,19 @@ function Export-TiTCReport {
                 $htmlPath $pdfPath 2>$null
             if (Test-Path $pdfPath) {
                 Write-TiTCLog "PDF report saved: $pdfPath" -Level Success -Component $script:COMPONENT
+                if ($Format -eq 'Both') {
+                    return [PSCustomObject]@{
+                        HtmlPath = $htmlPath
+                        PdfPath  = $pdfPath
+                    }
+                }
                 return $pdfPath
             }
         }
         else {
+            if ($Format -eq 'Both') {
+                throw "Report format 'Both' requires wkhtmltopdf to generate the PDF artifact."
+            }
             Write-TiTCLog "wkhtmltopdf not found. HTML report generated — open in browser and print to PDF." -Level Warning -Component $script:COMPONENT
         }
     }
@@ -156,14 +174,20 @@ function Build-TiTCReportHTML {
         [hashtable]$AssessmentData,
         [hashtable]$Colors,
         [string]$CompanyName,
-        [string]$LogoPath
+        [string]$LogoPath,
+        [string]$PreparedBy,
+        [string]$PreparedFor,
+        [string]$ReportType = 'Snapshot'
     )
 
     $report    = $AssessmentData.Report
     $riskData  = $AssessmentData.RiskAnalysis
     $summary   = $AssessmentData.ExecutiveSummary
 
-    $tenantName   = if ($report.TenantName) { $report.TenantName } else { $report.TenantId }
+    $tenantName   = $report.TenantName
+    if (-not $tenantName -or $tenantName -eq $report.TenantId) {
+        $tenantName = if ($report.TenantDomain) { $report.TenantDomain } else { $report.TenantId }
+    }
     $assessDate   = if ($report.AssessmentDate) { ([datetime]$report.AssessmentDate).ToString('dd MMMM yyyy') } else { Get-Date -Format 'dd MMMM yyyy' }
     $overallScore = if ($summary.OverallScore) { $summary.OverallScore } else { 0 }
     $rating       = if ($summary.OverallRating) { $summary.OverallRating } else { 'N/A' }
@@ -199,6 +223,17 @@ function Build-TiTCReportHTML {
     # License waste
     $licenseWaste = $summary.LicenseWaste
 
+    # Severity color + name maps — handles both enum name ('Critical') and int ('4') forms
+    # TiTCSeverity enum: Info=0, Low=1, Medium=2, High=3, Critical=4
+    $sevColorMap = @{
+        'Critical' = '#DC2626'; '4' = '#DC2626'
+        'High'     = '#EA580C'; '3' = '#EA580C'
+        'Medium'   = '#D97706'; '2' = '#D97706'
+        'Low'      = '#2563EB'; '1' = '#2563EB'
+        'Info'     = '#6B7280'; '0' = '#6B7280'
+    }
+    $sevNameMap = @{ '0' = 'Info'; '1' = 'Low'; '2' = 'Medium'; '3' = 'High'; '4' = 'Critical' }
+
     # Logo tag
     $logoTag = if ($LogoPath -and (Test-Path $LogoPath)) {
         $ext = [System.IO.Path]::GetExtension($LogoPath).TrimStart('.')
@@ -208,12 +243,28 @@ function Build-TiTCReportHTML {
         "<span style='font-size:1.4rem;font-weight:800;color:$($Colors.accent);'>$CompanyName</span>"
     }
 
-    # Executive narrative
-    $narrative = if ($riskData.ExecutiveNarrative) {
-        ($riskData.ExecutiveNarrative -split "`n" | Where-Object { $_.Trim() } |
-            ForEach-Object { "<p>$($_.Trim())</p>" }) -join "`n"
-    } else {
+    # Executive narrative — may be an OrderedDictionary or plain string
+    $narrativeSrc = $riskData.ExecutiveNarrative
+    $narrative = if (-not $narrativeSrc) {
         "<p>Assessment complete. Review findings below for details.</p>"
+    } elseif ($narrativeSrc -is [System.Collections.IDictionary]) {
+        $parts = [System.Collections.ArrayList]::new()
+        if ($narrativeSrc['OverallAssessment']) {
+            $null = $parts.Add("<p style='margin-bottom:12px;'>$($narrativeSrc['OverallAssessment'])</p>")
+        }
+        if ($narrativeSrc['HighestRiskArea']) {
+            $null = $parts.Add("<p style='margin-bottom:12px;'><strong>Highest Risk Area:</strong> $($narrativeSrc['HighestRiskArea'])</p>")
+        }
+        if ($narrativeSrc['ImmediateActions']) {
+            $null = $parts.Add("<p style='margin-bottom:12px;'><strong>Immediate Actions:</strong> $($narrativeSrc['ImmediateActions'])</p>")
+        }
+        if ($narrativeSrc['ComplianceStatus']) {
+            $null = $parts.Add("<p style='margin-bottom:12px;'><strong>Compliance Status:</strong> $($narrativeSrc['ComplianceStatus'])</p>")
+        }
+        if ($parts.Count -gt 0) { $parts -join "`n" } else { "<p>Assessment complete. Review findings below for details.</p>" }
+    } else {
+        ($narrativeSrc -split "`n" | Where-Object { $_.Trim() } |
+            ForEach-Object { "<p>$($_.Trim())</p>" }) -join "`n"
     }
 
     # Score gauge SVG (circular)
@@ -228,18 +279,34 @@ function Build-TiTCReportHTML {
     $domainCards = ''
     if ($report.CollectorResults) {
         foreach ($cr in $report.CollectorResults) {
-            $domScore   = if ($riskData.DomainScores -and $riskData.DomainScores[$cr.Domain]) {
-                $riskData.DomainScores[$cr.Domain]
-            } else { 'N/A' }
+            $domainKey = [string]$cr.Domain
+            $domScoreEntry = if ($riskData.RiskScore -and $riskData.RiskScore.DomainScores -and
+                                 $riskData.RiskScore.DomainScores[$domainKey]) {
+                $riskData.RiskScore.DomainScores[$domainKey]
+            } else { $null }
+            $domScoreNum     = if ($domScoreEntry) { [double]$domScoreEntry.Score } else { $null }
+            $domScoreDisplay = if ($null -ne $domScoreNum) { "$domScoreNum ($($domScoreEntry.Rating))" } else { 'N/A' }
             $findCount  = $cr.FindingsCount
-            $cardColor  = if ($domScore -is [int] -and $domScore -gt 60) { $Colors.danger }
-                          elseif ($domScore -is [int] -and $domScore -gt 30) { $Colors.warning }
+            $checkResults = if ($cr.Metadata -and $cr.Metadata['CheckResults']) { @($cr.Metadata['CheckResults'].Values) } else { @() }
+            $permSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedInsufficientPermissions' }).Count
+            $modeSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedUnsupportedMode' }).Count
+            $featureSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedFeatureUnavailable' }).Count
+            $failedChecks = @($checkResults | Where-Object { $_.Status -eq 'Failed' }).Count
+            $cardColor  = if ($null -ne $domScoreNum -and $domScoreNum -gt 60) { $Colors.danger }
+                          elseif ($null -ne $domScoreNum -and $domScoreNum -gt 30) { $Colors.warning }
                           else { $Colors.accent }
+            $domainMeta = "$findCount findings"
+            if ($checkResults.Count -gt 0) {
+                $domainMeta = "$domainMeta | $($cr.Status)"
+                if (($permSkipped + $modeSkipped + $featureSkipped + $failedChecks) -gt 0) {
+                    $domainMeta += " | $permSkipped permission-skip, $modeSkipped mode-skip, $featureSkipped feature-skip, $failedChecks failed"
+                }
+            }
             $domainCards += @"
 <div class="domain-card">
   <div class="domain-name">$($cr.Domain)</div>
-  <div class="domain-score" style="color:$cardColor">$domScore</div>
-  <div class="domain-meta">$findCount findings</div>
+  <div class="domain-score" style="color:$cardColor">$domScoreDisplay</div>
+  <div class="domain-meta">$domainMeta</div>
 </div>
 "@
         }
@@ -272,12 +339,14 @@ function Build-TiTCReportHTML {
     $top10Rows = ''
     $priority = 1
     foreach ($f in $top10) {
-        $sevColor = if ($script:SEVERITY_COLORS[$f.Severity]) { $script:SEVERITY_COLORS[$f.Severity] } else { '#6B7280' }
+        $sevKey   = [string]$f.Severity
+        $sevColor = if ($sevColorMap[$sevKey]) { $sevColorMap[$sevKey] } else { '#6B7280' }
+        $sevName  = if ($sevNameMap[$sevKey]) { $sevNameMap[$sevKey] } else { $sevKey }
         $affCount = if ($f.AffectedResources) { $f.AffectedResources.Count } else { 0 }
         $top10Rows += @"
 <tr>
   <td>$priority</td>
-  <td><span class="badge" style="background:$sevColor">$($f.Severity)</span></td>
+  <td><span class="badge" style="background:$sevColor">$sevName</span></td>
   <td>$($f.Domain)</td>
   <td>$($f.Title)</td>
   <td>$affCount</td>
@@ -292,7 +361,9 @@ function Build-TiTCReportHTML {
         $findingsDetail += "<div class='domain-section'><h3 class='domain-header'>$($group.Name)</h3>"
         $sortedF = $group.Group | Sort-Object { @('Critical','High','Medium','Low','Info').IndexOf($_.Severity) }
         foreach ($f in $sortedF) {
-            $sevColor = if ($script:SEVERITY_COLORS[$f.Severity]) { $script:SEVERITY_COLORS[$f.Severity] } else { '#6B7280' }
+            $sevKey   = [string]$f.Severity
+            $sevColor = if ($sevColorMap[$sevKey]) { $sevColorMap[$sevKey] } else { '#6B7280' }
+            $sevName  = if ($sevNameMap[$sevKey]) { $sevNameMap[$sevKey] } else { $sevKey }
             $affectedHtml = ''
             if ($f.AffectedResources -and $f.AffectedResources.Count -gt 0) {
                 $shown = $f.AffectedResources | Select-Object -First 10
@@ -307,7 +378,7 @@ function Build-TiTCReportHTML {
             $findingsDetail += @"
 <div class='finding-card'>
   <div class='finding-header'>
-    <span class='badge' style='background:$sevColor'>$($f.Severity)</span>
+    <span class='badge' style='background:$sevColor'>$sevName</span>
     <strong>$($f.Title)</strong>
     <span class='finding-id'>$($f.FindingId)</span>
   </div>
@@ -325,14 +396,16 @@ function Build-TiTCReportHTML {
     $remRows = ''
     $remPriority = 1
     foreach ($item in ($remPlan | Select-Object -First 25)) {
-        $sevColor = if ($script:SEVERITY_COLORS[$item.Severity]) { $script:SEVERITY_COLORS[$item.Severity] } else { '#6B7280' }
+        $sevKey   = [string]$item.Severity
+        $sevColor = if ($sevColorMap[$sevKey]) { $sevColorMap[$sevKey] } else { '#6B7280' }
+        $sevName  = if ($sevNameMap[$sevKey]) { $sevNameMap[$sevKey] } else { $sevKey }
         $hasScript = if ($item.HasRemediationScript) { '&#10003;' } else { '&mdash;' }
         $effort = if ($item.EffortHours) { "$($item.EffortHours)h" } else { 'TBD' }
         $remRows += @"
 <tr>
   <td>$remPriority</td>
   <td>$($item.Title)</td>
-  <td><span class="badge" style="background:$sevColor">$($item.Severity)</span></td>
+  <td><span class="badge" style="background:$sevColor">$sevName</span></td>
   <td>$effort</td>
   <td style="text-align:center">$hasScript</td>
 </tr>
@@ -343,10 +416,12 @@ function Build-TiTCReportHTML {
     # Quick wins HTML
     $quickWinCards = ''
     foreach ($qw in ($quickWins | Select-Object -First 8)) {
-        $sevColor = if ($script:SEVERITY_COLORS[$qw.Severity]) { $script:SEVERITY_COLORS[$qw.Severity] } else { '#6B7280' }
+        $sevKey   = [string]$qw.Severity
+        $sevColor = if ($sevColorMap[$sevKey]) { $sevColorMap[$sevKey] } else { '#6B7280' }
+        $sevName  = if ($sevNameMap[$sevKey]) { $sevNameMap[$sevKey] } else { $sevKey }
         $quickWinCards += @"
 <div class="qw-card">
-  <span class="badge" style="background:$sevColor">$($qw.Severity)</span>
+  <span class="badge" style="background:$sevColor">$sevName</span>
   <strong>$($qw.Title)</strong>
   <p>$($qw.Remediation)</p>
 </div>
@@ -357,8 +432,13 @@ function Build-TiTCReportHTML {
     $complianceHtml = ''
     foreach ($fw in $compGaps.Keys) {
         $fwData = $compGaps[$fw]
-        $coverage = if ($fwData.CoveragePercent) { $fwData.CoveragePercent } else { 0 }
-        $barColor = if ($coverage -ge 80) { $Colors.accent } elseif ($coverage -ge 60) { $Colors.warning } else { $Colors.danger }
+        if (-not $fwData) { continue }
+        $coverage = if ($null -ne $fwData['CoveragePercent'] -and $fwData['CoveragePercent'] -ne '') {
+            [double]$fwData['CoveragePercent']
+        } elseif ($null -ne $fwData.CoveragePercent) {
+            [double]$fwData.CoveragePercent
+        } else { 0 }
+        $barColor = if ($coverage -ge 70) { $Colors.accent } elseif ($coverage -ge 40) { $Colors.warning } else { $Colors.danger }
         $complianceHtml += @"
 <div class="compliance-fw">
   <div class="fw-name">$fw</div>
@@ -440,14 +520,233 @@ function Build-TiTCReportHTML {
 "@
     }
 
-    # Build the full HTML
+    $collectorCoverageHtml = ''
+    if ($report.CollectorResults) {
+        $coverageRows = ''
+        foreach ($cr in $report.CollectorResults) {
+            $checkResults = if ($cr.Metadata -and $cr.Metadata['CheckResults']) { @($cr.Metadata['CheckResults'].Values) } else { @() }
+            if ($checkResults.Count -eq 0) { continue }
+
+            $passedChecks = @($checkResults | Where-Object { $_.Status -eq 'Passed' }).Count
+            $findingChecks = @($checkResults | Where-Object { $_.Status -eq 'FindingDetected' }).Count
+            $permSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedInsufficientPermissions' }).Count
+            $modeSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedUnsupportedMode' }).Count
+            $featureSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedFeatureUnavailable' }).Count
+            $failedChecks = @($checkResults | Where-Object { $_.Status -eq 'Failed' }).Count
+
+            $coverageRows += @"
+<tr>
+  <td>$($cr.Domain)</td>
+  <td>$($cr.Status)</td>
+  <td>$passedChecks</td>
+  <td>$findingChecks</td>
+  <td>$permSkipped</td>
+  <td>$modeSkipped</td>
+  <td>$featureSkipped</td>
+  <td>$failedChecks</td>
+</tr>
+"@
+        }
+
+        if ($coverageRows) {
+            $collectorCoverageHtml = @"
+<section class="section">
+  <h2 class="section-title">Collector Coverage</h2>
+  <table>
+    <thead><tr><th>Domain</th><th>Status</th><th>Passed</th><th>Findings</th><th>Permission Skips</th><th>Mode Skips</th><th>Feature Skips</th><th>Failed</th></tr></thead>
+    <tbody>$coverageRows</tbody>
+  </table>
+</section>
+"@
+        }
+    }
+
+    # ── Cover variables ─────────────────────────────────────────────────
+    $coverSubtitle  = if ($ReportType -eq 'MSPAuditPack') { 'M365 Security &amp; Compliance Audit Pack' } else { 'M365 Risk &amp; Compliance Assessment' }
+    $preparedByLine  = if ($PreparedBy)  { "<div class='cover-subtitle'>Prepared by: $PreparedBy</div>"  } else { '' }
+    $preparedForLine = if ($PreparedFor) { "<div class='cover-subtitle'>Prepared for: $PreparedFor</div>" } else { '' }
+
+    # ── Evidence pack summary section (MSP only) ────────────────────────
+    $evidencePackSectionHtml = ''
+    if ($ReportType -eq 'MSPAuditPack' -and $compGaps.Keys.Count -gt 0) {
+        $evRows = ''
+        foreach ($fw in $compGaps.Keys) {
+            $fwD = $compGaps[$fw]; if (-not $fwD) { continue }
+            $evCov   = if ($null -ne $fwD['CoveragePercent'])  { [double]$fwD['CoveragePercent']  } elseif ($null -ne $fwD.CoveragePercent)  { [double]$fwD.CoveragePercent  } else { 0 }
+            $evTotal = if ($null -ne $fwD['TotalControls'])    { $fwD['TotalControls']    } elseif ($null -ne $fwD.TotalControls)    { $fwD.TotalControls    } else { 0 }
+            $evPass  = if ($null -ne $fwD['Compliant'])        { $fwD['Compliant']        } elseif ($null -ne $fwD.Compliant)        { $fwD.Compliant        } else { 0 }
+            $evFail  = if ($null -ne $fwD['NonCompliant'])     { $fwD['NonCompliant']     } elseif ($null -ne $fwD.NonCompliant)     { $fwD.NonCompliant     } else { 0 }
+            $evColor = if ($evCov -ge 70) { '#10B981' } elseif ($evCov -ge 40) { '#F59E0B' } else { '#EF4444' }
+            $evRows += "<tr><td>$fw</td><td>$evTotal</td><td style='color:#10B981;font-weight:600'>$evPass</td><td style='color:#EF4444;font-weight:600'>$evFail</td><td><strong style='color:$evColor'>$evCov%</strong></td><td style='color:#64748B;font-size:0.8rem'>evidence/$($fw.ToLower())/</td></tr>"
+        }
+        $evidencePackSectionHtml = @"
+<section class='section page-break'>
+  <h2 class='section-title'>Evidence Pack Summary</h2>
+  <p style='color:#64748B;margin-bottom:16px;'>Compliance evidence files are in the <strong>evidence/</strong> folder alongside this report. Each framework subfolder contains per-control evidence JSON and findings CSV files.</p>
+  <table>
+    <thead><tr><th>Framework</th><th>Assessed</th><th>Passing</th><th>Failing</th><th>Coverage</th><th>Evidence Path</th></tr></thead>
+    <tbody>$evRows</tbody>
+  </table>
+</section>
+"@
+    }
+
+    # ── Expanded compliance section for MSP (shows non-compliant controls) ──
+    $complianceSectionForMSP = $complianceSectionHtml
+    if ($ReportType -eq 'MSPAuditPack' -and $compGaps.Keys.Count -gt 0) {
+        $mspCompBody = ''
+        foreach ($fw in $compGaps.Keys) {
+            $fwD = $compGaps[$fw]; if (-not $fwD) { continue }
+            $mspCov = if ($null -ne $fwD['CoveragePercent']) { [double]$fwD['CoveragePercent'] } elseif ($null -ne $fwD.CoveragePercent) { [double]$fwD.CoveragePercent } else { 0 }
+            $barC   = if ($mspCov -ge 70) { '#10B981' } elseif ($mspCov -ge 40) { '#F59E0B' } else { '#EF4444' }
+            $ctrlDetails = if ($fwD['ControlDetails']) { $fwD['ControlDetails'] } else { $fwD.ControlDetails }
+            $gapsHtml = ''
+            if ($ctrlDetails) {
+                $ctrlKeys = try { $ctrlDetails.Keys } catch { $ctrlDetails | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name }
+                $failItems = foreach ($cid in $ctrlKeys) {
+                    $cd = if ($ctrlDetails -is [System.Collections.IDictionary]) { $ctrlDetails[$cid] } else { $ctrlDetails.$cid }
+                    $cdStatus = if ($cd -is [System.Collections.IDictionary]) { $cd['Status'] } else { $cd.Status }
+                    if ($cdStatus -eq 'NonCompliant') {
+                        $cdTitle = if ($cd -is [System.Collections.IDictionary]) { $cd['Title'] } else { $cd.Title }
+                        "<li><code style='color:#EF4444'>$cid</code> &mdash; $cdTitle</li>"
+                    }
+                }
+                if ($failItems) { $gapsHtml = "<ul style='margin:8px 0 0 20px;font-size:0.82rem;color:#64748B;'>$($failItems -join '')</ul>" }
+            }
+            $mspCompBody += @"
+<div style='margin-bottom:20px;padding:16px;background:#F8FAFC;border-radius:6px;border:1px solid #E2E8F0;'>
+  <div style='display:flex;align-items:center;gap:12px;margin-bottom:8px;'>
+    <span style='font-weight:700;font-size:1rem;min-width:160px;'>$fw</span>
+    <div style='flex:1;background:#E2E8F0;border-radius:4px;height:14px;overflow:hidden;'><div style='width:$mspCov%;height:100%;background:$barC;border-radius:4px;'></div></div>
+    <span style='font-weight:800;color:$barC;min-width:52px;text-align:right;'>$mspCov%</span>
+  </div>
+  $gapsHtml
+  <div style='margin-top:8px;font-size:0.78rem;color:#94A3B8;'>See: <code>evidence/$($fw.ToLower())/</code></div>
+</div>
+"@
+        }
+        $complianceSectionForMSP = @"
+<section class='section page-break'>
+  <h2 class='section-title'>Compliance Posture</h2>
+  <p style='color:#64748B;margin-bottom:16px;'>Framework coverage based on open security findings mapped to compliance controls.</p>
+  $mspCompBody
+</section>
+"@
+    }
+
+    # ── Standard body section strings ───────────────────────────────────
+    $secExecSummary = @"
+<section class="section">
+  <h2 class="section-title">Executive Summary</h2>
+  $narrative
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px;margin-top:20px;">
+    <div style="text-align:center;padding:16px;background:#FEF2F2;border-radius:8px;"><div style="font-size:2rem;font-weight:800;color:#DC2626;">$critCount</div><div style="font-size:0.75rem;color:#6B7280;">Critical</div></div>
+    <div style="text-align:center;padding:16px;background:#FFF7ED;border-radius:8px;"><div style="font-size:2rem;font-weight:800;color:#EA580C;">$highCount</div><div style="font-size:0.75rem;color:#6B7280;">High</div></div>
+    <div style="text-align:center;padding:16px;background:#FFFBEB;border-radius:8px;"><div style="font-size:2rem;font-weight:800;color:#D97706;">$medCount</div><div style="font-size:0.75rem;color:#6B7280;">Medium</div></div>
+    <div style="text-align:center;padding:16px;background:#EFF6FF;border-radius:8px;"><div style="font-size:2rem;font-weight:800;color:#2563EB;">$lowCount</div><div style="font-size:0.75rem;color:#6B7280;">Low</div></div>
+    <div style="text-align:center;padding:16px;background:#F9FAFB;border-radius:8px;"><div style="font-size:2rem;font-weight:800;color:#6B7280;">$totalFindings</div><div style="font-size:0.75rem;color:#6B7280;">Total</div></div>
+  </div>
+</section>
+"@
+
+    $secRiskDashboard = @"
+<section class="section page-break">
+  <h2 class="section-title">Risk Score Dashboard</h2>
+  <div class="gauge-wrap">
+    <svg class="gauge-svg" width="140" height="140" viewBox="0 0 120 120">
+      <circle cx="60" cy="60" r="45" fill="none" stroke="#E2E8F0" stroke-width="10"/>
+      <circle cx="60" cy="60" r="45" fill="none" stroke="$gaugeColor" stroke-width="10"
+        stroke-dasharray="283" stroke-dashoffset="$dashOffset"
+        stroke-linecap="round" transform="rotate(-90 60 60)"/>
+      <text x="60" y="56" class="gauge-text" font-size="22" font-weight="800" fill="$gaugeColor">$overallScore</text>
+      <text x="60" y="72" class="gauge-text" font-size="11" fill="#64748B">/ 100</text>
+      <text x="60" y="86" class="gauge-text" font-size="13" font-weight="700" fill="$ratingColor">$rating</text>
+    </svg>
+    <div style="flex:1">
+      <h3 style="margin-bottom:16px;font-size:0.9rem;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;">Security Categories</h3>
+      $categoryBars
+    </div>
+  </div>
+  <h3 style="margin:24px 0 16px;font-size:0.9rem;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;">Domain Scores</h3>
+  <div class="domain-grid">$domainCards</div>
+</section>
+"@
+
+    $secSeverityDist = @"
+<section class="section">
+  <h2 class="section-title">Severity Distribution</h2>
+  $severitySectionHtml
+</section>
+"@
+
+    $secTop10 = @"
+<section class="section page-break">
+  <h2 class="section-title">Top 10 Priority Findings</h2>
+  <table>
+    <thead><tr><th>#</th><th>Severity</th><th>Domain</th><th>Finding</th><th>Affected</th></tr></thead>
+    <tbody>$top10Rows</tbody>
+  </table>
+</section>
+"@
+
+    $secFindingsDetail = @"
+<section class="section page-break">
+  <h2 class="section-title">Full Findings Detail</h2>
+  $findingsDetail
+</section>
+"@
+
+    $secRemediation = @"
+<section class="section page-break">
+  <h2 class="section-title">Prioritised Remediation Plan</h2>
+  <table>
+    <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Effort</th><th>Script</th></tr></thead>
+    <tbody>$remRows</tbody>
+  </table>
+</section>
+"@
+
+    $appendixPreparedBy = if ($PreparedBy) { $PreparedBy } else { $CompanyName }
+    $secAppendix = @"
+<section class="section page-break">
+  <h2 class="section-title">Appendix &mdash; Methodology &amp; Scope</h2>
+  <div class="appendix-grid">
+    <div class="appendix-item"><strong>Tool</strong>AuditXpert by TakeItToCloud v$($script:TOOL_VERSION)</div>
+    <div class="appendix-item"><strong>Assessment Profile</strong>$($report.AssessmentProfile)</div>
+    <div class="appendix-item"><strong>Tenant</strong>$tenantName ($($report.TenantId))</div>
+    <div class="appendix-item"><strong>Assessment Date</strong>$assessDate</div>
+    <div class="appendix-item"><strong>Prepared By</strong>$appendixPreparedBy</div>
+    <div class="appendix-item"><strong>Total Findings</strong>$totalFindings</div>
+  </div>
+  <h3 style="margin:20px 0 12px;font-size:0.9rem;">Methodology</h3>
+  <p style="color:#64748B;font-size:0.85rem;">This assessment uses read-only Microsoft Graph API calls to evaluate the security configuration of the tenant. No changes are made to tenant configuration. All data is collected at the time of assessment and reflects a point-in-time snapshot.</p>
+  <h3 style="margin:20px 0 12px;font-size:0.9rem;">Required Permissions</h3>
+  <p style="color:#64748B;font-size:0.85rem;">Directory.Read.All &bull; Policy.Read.All &bull; SecurityEvents.Read.All &bull; DeviceManagementConfiguration.Read.All &bull; DeviceManagementManagedDevices.Read.All &bull; Reports.Read.All &bull; RoleManagement.Read.Directory &bull; User.Read.All &bull; AuditLog.Read.All</p>
+</section>
+"@
+
+    # ── Assemble sections in report-type order ───────────────────────────
+    $bodySections = if ($ReportType -eq 'MSPAuditPack') {
+        @($secExecSummary, $complianceSectionForMSP, $evidencePackSectionHtml, $secRiskDashboard,
+          $secSeverityDist, $secTop10, $secFindingsDetail, $secRemediation,
+          $quickWinsSectionHtml, $collectorCoverageHtml, $licenseWasteHtml, $secAppendix)
+    } else {
+        @($secExecSummary, $secRiskDashboard, $secSeverityDist, $secTop10, $secFindingsDetail,
+          $secRemediation, $quickWinsSectionHtml, $complianceSectionHtml,
+          $collectorCoverageHtml, $licenseWasteHtml, $secAppendix)
+    }
+    $bodyHtml = ($bodySections | Where-Object { $_ }) -join "`n"
+
+    $reportTitle = if ($ReportType -eq 'MSPAuditPack') { "M365 MSP Audit Pack — $tenantName" } else { "M365 Security Assessment — $tenantName" }
+
+    # ── Build final HTML ─────────────────────────────────────────────────
     $html = @"
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>M365 Security Assessment — $tenantName</title>
+<title>$reportTitle</title>
 <style>
   :root {
     --primary: $($Colors.primary);
@@ -560,119 +859,15 @@ function Build-TiTCReportHTML {
 <div class="cover">
   <div class="cover-logo">$logoTag</div>
   <div class="cover-tenant">$tenantName</div>
-  <div class="cover-subtitle">M365 Risk &amp; Compliance Assessment &mdash; $assessDate</div>
+  <div class="cover-subtitle">$coverSubtitle &mdash; $assessDate</div>
+  $preparedByLine
+  $preparedForLine
   <div class="score-badge">$rating</div>
   <div class="cover-score-label">Overall Risk Rating &mdash; Score: $overallScore / 100</div>
 </div>
 
 <div class="container">
-
-<!-- EXECUTIVE SUMMARY -->
-<section class="section">
-  <h2 class="section-title">Executive Summary</h2>
-  $narrative
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px;margin-top:20px;">
-    <div style="text-align:center;padding:16px;background:#FEF2F2;border-radius:8px;">
-      <div style="font-size:2rem;font-weight:800;color:#DC2626;">$critCount</div>
-      <div style="font-size:0.75rem;color:#6B7280;">Critical</div>
-    </div>
-    <div style="text-align:center;padding:16px;background:#FFF7ED;border-radius:8px;">
-      <div style="font-size:2rem;font-weight:800;color:#EA580C;">$highCount</div>
-      <div style="font-size:0.75rem;color:#6B7280;">High</div>
-    </div>
-    <div style="text-align:center;padding:16px;background:#FFFBEB;border-radius:8px;">
-      <div style="font-size:2rem;font-weight:800;color:#D97706;">$medCount</div>
-      <div style="font-size:0.75rem;color:#6B7280;">Medium</div>
-    </div>
-    <div style="text-align:center;padding:16px;background:#EFF6FF;border-radius:8px;">
-      <div style="font-size:2rem;font-weight:800;color:#2563EB;">$lowCount</div>
-      <div style="font-size:0.75rem;color:#6B7280;">Low</div>
-    </div>
-    <div style="text-align:center;padding:16px;background:#F9FAFB;border-radius:8px;">
-      <div style="font-size:2rem;font-weight:800;color:#6B7280;">$totalFindings</div>
-      <div style="font-size:0.75rem;color:#6B7280;">Total</div>
-    </div>
-  </div>
-</section>
-
-<!-- RISK SCORE DASHBOARD -->
-<section class="section page-break">
-  <h2 class="section-title">Risk Score Dashboard</h2>
-  <div class="gauge-wrap">
-    <svg class="gauge-svg" width="140" height="140" viewBox="0 0 120 120">
-      <circle cx="60" cy="60" r="45" fill="none" stroke="#E2E8F0" stroke-width="10"/>
-      <circle cx="60" cy="60" r="45" fill="none" stroke="$gaugeColor" stroke-width="10"
-        stroke-dasharray="283" stroke-dashoffset="$dashOffset"
-        stroke-linecap="round" transform="rotate(-90 60 60)"/>
-      <text x="60" y="56" class="gauge-text" font-size="22" font-weight="800" fill="$gaugeColor">$overallScore</text>
-      <text x="60" y="72" class="gauge-text" font-size="11" fill="#64748B">/ 100</text>
-      <text x="60" y="86" class="gauge-text" font-size="13" font-weight="700" fill="$ratingColor">$rating</text>
-    </svg>
-    <div style="flex:1">
-      <h3 style="margin-bottom:16px;font-size:0.9rem;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;">Security Categories</h3>
-      $categoryBars
-    </div>
-  </div>
-  <h3 style="margin:24px 0 16px;font-size:0.9rem;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;">Domain Scores</h3>
-  <div class="domain-grid">$domainCards</div>
-</section>
-
-<!-- SEVERITY DISTRIBUTION -->
-<section class="section">
-  <h2 class="section-title">Severity Distribution</h2>
-  $severitySectionHtml
-</section>
-
-<!-- TOP 10 FINDINGS -->
-<section class="section page-break">
-  <h2 class="section-title">Top 10 Priority Findings</h2>
-  <table>
-    <thead><tr><th>#</th><th>Severity</th><th>Domain</th><th>Finding</th><th>Affected</th></tr></thead>
-    <tbody>$top10Rows</tbody>
-  </table>
-</section>
-
-<!-- FULL FINDINGS DETAIL -->
-<section class="section page-break">
-  <h2 class="section-title">Full Findings Detail</h2>
-  $findingsDetail
-</section>
-
-<!-- REMEDIATION PLAN -->
-<section class="section page-break">
-  <h2 class="section-title">Prioritised Remediation Plan</h2>
-  <table>
-    <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Effort</th><th>Script</th></tr></thead>
-    <tbody>$remRows</tbody>
-  </table>
-</section>
-
-<!-- QUICK WINS -->
-$quickWinsSectionHtml
-
-<!-- COMPLIANCE POSTURE -->
-$complianceSectionHtml
-
-<!-- LICENSE WASTE -->
-$licenseWasteHtml
-
-<!-- APPENDIX -->
-<section class="section page-break">
-  <h2 class="section-title">Appendix — Methodology &amp; Scope</h2>
-  <div class="appendix-grid">
-    <div class="appendix-item"><strong>Tool</strong>AuditXpert by TakeItToCloud v$($script:TOOL_VERSION)</div>
-    <div class="appendix-item"><strong>Assessment Profile</strong>$($report.AssessmentProfile)</div>
-    <div class="appendix-item"><strong>Tenant</strong>$tenantName ($($report.TenantId))</div>
-    <div class="appendix-item"><strong>Assessment Date</strong>$assessDate</div>
-    <div class="appendix-item"><strong>Collectors Run</strong>$($report.CollectorResults.Count) domains</div>
-    <div class="appendix-item"><strong>Total Findings</strong>$totalFindings</div>
-  </div>
-  <h3 style="margin:20px 0 12px;font-size:0.9rem;">Methodology</h3>
-  <p style="color:#64748B;font-size:0.85rem;">This assessment uses read-only Microsoft Graph API calls to evaluate the security configuration of the tenant. No changes are made to tenant configuration. All data is collected at the time of assessment and reflects a point-in-time snapshot. The risk scoring model weights findings by severity, domain importance, affected resource count, and compliance impact.</p>
-  <h3 style="margin:20px 0 12px;font-size:0.9rem;">Required Permissions</h3>
-  <p style="color:#64748B;font-size:0.85rem;">Directory.Read.All &bull; Policy.Read.All &bull; SecurityEvents.Read.All &bull; DeviceManagementConfiguration.Read.All &bull; DeviceManagementManagedDevices.Read.All &bull; Reports.Read.All &bull; RoleManagement.Read.Directory &bull; User.Read.All &bull; AuditLog.Read.All</p>
-</section>
-
+$bodyHtml
 </div><!-- /container -->
 </body>
 </html>

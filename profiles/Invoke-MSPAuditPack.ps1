@@ -21,13 +21,18 @@
     .\Invoke-MSPAuditPack.ps1 -TenantId "contoso.onmicrosoft.com" `
         -ClientId $cid -ClientSecret $secret `
         -MSPCompanyName "SecureIT Solutions" `
-        -AuditPacks ISO27001, CyberInsurance
+        -AuditPacks ISO27001, CyberInsurance, CISControls
 
 .EXAMPLE
     # Full pack with all frameworks and AI explainer
     .\Invoke-MSPAuditPack.ps1 -TenantId $tid -ClientId $cid -ClientSecret $secret `
         -MSPCompanyName "MyMSP" -MSPLogoPath "C:\branding\logo.png" `
         -AuditPacks Full -IncludeAIExplainer
+
+.EXAMPLE
+    # Certificate-based MSP pack run
+    .\Invoke-MSPAuditPack.ps1 -TenantId $tid -ClientId $cid -CertificateThumbprint $thumb `
+        -MSPCompanyName "SecureIT Solutions"
 
 .NOTES
     Product:    MSP Automation Packs
@@ -39,15 +44,23 @@
 param(
     # ── Connection ──────────────────────────────────────────────────
     [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
     [string]$TenantId,
 
-    [Parameter(ParameterSetName = 'AppAuth')]
+    # Application (client) ID. Required for app-secret auth and certificate auth.
+    [Parameter(Mandatory, ParameterSetName = 'AppAuth')]
+    [Parameter(Mandatory, ParameterSetName = 'CertAuth')]
+    [ValidateNotNullOrEmpty()]
     [string]$ClientId,
 
-    [Parameter(ParameterSetName = 'AppAuth')]
+    # Client secret for app-secret authentication.
+    [Parameter(Mandatory, ParameterSetName = 'AppAuth')]
+    [ValidateNotNullOrEmpty()]
     [string]$ClientSecret,
 
-    [Parameter(ParameterSetName = 'CertAuth')]
+    # Certificate thumbprint from Cert:\CurrentUser\My or Cert:\LocalMachine\My.
+    [Parameter(Mandatory, ParameterSetName = 'CertAuth')]
+    [ValidateNotNullOrEmpty()]
     [string]$CertificateThumbprint,
 
     # ── MSP Branding ────────────────────────────────────────────────
@@ -59,7 +72,7 @@ param(
     [hashtable]$MSPColors,
 
     # ── Pack Selection ──────────────────────────────────────────────
-    [ValidateSet('ISO27001', 'SOC2Lite', 'CyberInsurance', 'InternalRisk', 'Full')]
+    [ValidateSet('ISO27001', 'SOC2Lite', 'CyberInsurance', 'CISControls', 'InternalRisk', 'Full')]
     [string[]]$AuditPacks = @('Full'),
 
     # ── Scope ───────────────────────────────────────────────────────
@@ -77,6 +90,8 @@ param(
     # ── Options ─────────────────────────────────────────────────────
     [switch]$IncludeAIExplainer,
     [string]$AIApiKey,
+    [ValidateSet('Auto', 'Claude', 'OpenAI')]
+    [string]$AIProvider = 'Auto',
 
     [ValidateSet('Debug', 'Info', 'Warning', 'Error')]
     [string]$LogLevel = 'Info'
@@ -113,6 +128,22 @@ Import-Module $reportModPath -Force
 Import-Module $evidenceModPath -Force
 Import-Module $aiModPath     -Force
 
+function Format-TiTCSummaryCell {
+    param(
+        [AllowNull()]
+        [string]$Value,
+        [int]$Width
+    )
+
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value.Length -gt $Width) {
+        if ($Width -le 3) { return $Value.Substring(0, $Width) }
+        return $Value.Substring(0, $Width - 3) + '...'
+    }
+
+    return $Value.PadRight($Width)
+}
+
 # ============================================================================
 # BANNER
 # ============================================================================
@@ -121,7 +152,8 @@ Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "  ║  AuditXpert — MSP Audit Pack v1.0.0                     ║" -ForegroundColor Cyan
 Write-Host "  ║  TakeItToCloud                                           ║" -ForegroundColor Cyan
-Write-Host "  ║  White-label client: $($MSPCompanyName.PadRight(35))║" -ForegroundColor Cyan
+$bannerClient = Format-TiTCSummaryCell -Value $MSPCompanyName -Width 35
+Write-Host "  ║  White-label client: $bannerClient║" -ForegroundColor Cyan
 Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
@@ -179,8 +211,20 @@ $config.Output.IncludeEvidence = $true
 
 $connectParams = @{ TenantId = $TenantId }
 switch ($PSCmdlet.ParameterSetName) {
-    'AppAuth'  { $connectParams.ClientId = $ClientId; $connectParams.ClientSecret = $ClientSecret }
-    'CertAuth' { $connectParams.ClientId = $ClientId; $connectParams.CertificateThumbprint = $CertificateThumbprint }
+    'AppAuth'  {
+        if ([string]::IsNullOrWhiteSpace($ClientId) -or [string]::IsNullOrWhiteSpace($ClientSecret)) {
+            throw "AppAuth requires TenantId, ClientId, and ClientSecret."
+        }
+        $connectParams.ClientId = $ClientId
+        $connectParams.ClientSecret = $ClientSecret
+    }
+    'CertAuth' {
+        if ([string]::IsNullOrWhiteSpace($ClientId) -or [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+            throw "CertAuth requires TenantId, ClientId, and CertificateThumbprint."
+        }
+        $connectParams.ClientId = $ClientId
+        $connectParams.CertificateThumbprint = $CertificateThumbprint
+    }
     default    { $connectParams.Interactive = $true }
 }
 $connectionResult = Connect-TiTCGraph @connectParams
@@ -258,12 +302,16 @@ $summary['EstimatedRemediationHours']= $riskAnalysis.EstimatedEffortHours
 if ($IncludeAIExplainer) {
     try {
         Write-TiTCLog "Running AI Explainer..." -Level Info -Component 'MSPAuditPack'
-        $enrichedFindings = Invoke-TiTCAIExplainer `
-            -Findings $report.AllFindings `
-            -Provider 'Claude' `
-            -ApiKey $AIApiKey `
-            -HighSeverityOnly `
-            -MaxFindings 20
+        $aiExplainerParams = @{
+            Findings         = $report.AllFindings
+            Provider         = $AIProvider
+            HighSeverityOnly = $true
+            MaxFindings      = 20
+        }
+        if ($AIApiKey) {
+            $aiExplainerParams.ApiKey = $AIApiKey
+        }
+        $enrichedFindings = Invoke-TiTCAIExplainer @aiExplainerParams
         Write-TiTCLog "AI explanations complete: $($enrichedFindings.Count) findings enriched" -Level Success -Component 'MSPAuditPack'
     }
     catch {
@@ -306,18 +354,28 @@ catch {
 }
 
 # HTML/PDF report
+$reportArtifacts = $null
 try {
     $assessmentData = @{ Report = $report; RiskAnalysis = $riskAnalysis; ExecutiveSummary = $summary }
     $reportBase = Join-Path $OutputPath 'report\security-assessment-report'
-    $fmt = if ($ReportFormat -eq 'Both') { 'PDF' } else { $ReportFormat }
-    $reportFile = Export-TiTCReport `
+    $reportArtifacts = Export-TiTCReport `
         -AssessmentData $assessmentData `
         -OutputPath $reportBase `
-        -Format $fmt `
+        -Format $ReportFormat `
         -CompanyName $MSPCompanyName `
         -LogoPath $MSPLogoPath `
-        -BrandingColors $MSPColors
-    Write-TiTCLog "Report: $reportFile" -Level Success -Component 'MSPAuditPack'
+        -BrandingColors $MSPColors `
+        -ReportType 'MSPAuditPack' `
+        -PreparedBy $MSPCompanyName `
+        -PreparedFor $report.TenantName
+
+    if ($ReportFormat -eq 'Both') {
+        Write-TiTCLog "Report HTML: $($reportArtifacts.HtmlPath)" -Level Success -Component 'MSPAuditPack'
+        Write-TiTCLog "Report PDF: $($reportArtifacts.PdfPath)" -Level Success -Component 'MSPAuditPack'
+    }
+    else {
+        Write-TiTCLog "Report: $reportArtifacts" -Level Success -Component 'MSPAuditPack'
+    }
 }
 catch {
     Write-TiTCLog "Report generation failed: $_" -Level Error -Component 'MSPAuditPack'
@@ -325,15 +383,19 @@ catch {
 
 # Metadata
 @{
-    GeneratedAt   = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
-    TenantId      = $report.TenantId
-    TenantName    = $report.TenantName
-    MSPCompanyName= $MSPCompanyName
-    AuditPacks    = $frameworksToRun
-    ToolVersion   = '1.0.0'
-    OverallScore  = $summary.OverallScore
-    OverallRating = $summary.OverallRating
-    TotalFindings = $summary.TotalFindings
+    PackType         = 'MSPAuditPack'
+    GeneratedAt      = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+    TenantId         = $report.TenantId
+    TenantDomain     = $report.TenantDomain
+    TenantName       = $report.TenantName
+    GeneratedBy      = $MSPCompanyName
+    AuditPacks       = $frameworksToRun
+    ToolVersion      = '1.0.0'
+    OverallScore     = $summary.OverallScore
+    OverallRating    = $summary.OverallRating
+    TotalFindings    = $summary.TotalFindings
+    CriticalFindings = $summary.CriticalFindings
+    HighFindings     = $summary.HighFindings
 } | ConvertTo-Json | Set-Content -Path (Join-Path $OutputPath 'metadata.json') -Force
 
 Export-TiTCLog -Path (Join-Path $OutputPath 'audit-trail.json')
@@ -344,16 +406,45 @@ Export-TiTCLog -Path (Join-Path $OutputPath 'audit-trail.json')
 
 Disconnect-TiTCGraph
 
+$summaryReportValue = if ($ReportFormat -eq 'Both' -and $reportArtifacts) {
+    'HTML + PDF'
+} elseif ($reportArtifacts) {
+    $ReportFormat
+} else {
+    'Not generated'
+}
+$summaryReportLine = ("  │  Report:     {0}" -f (Format-TiTCSummaryCell -Value $summaryReportValue -Width 55)) + "│"
+
+$summaryHtmlLine = $null
+$summaryPdfLine = $null
+if ($ReportFormat -eq 'Both' -and $reportArtifacts) {
+    $htmlArtifact = Split-Path $reportArtifacts.HtmlPath -Leaf
+    $pdfArtifact = Split-Path $reportArtifacts.PdfPath -Leaf
+    $summaryHtmlLine = ("  │  HTML File:  {0}" -f (Format-TiTCSummaryCell -Value $htmlArtifact -Width 55)) + "│"
+    $summaryPdfLine = ("  │  PDF File:   {0}" -f (Format-TiTCSummaryCell -Value $pdfArtifact -Width 55)) + "│"
+}
+
+$summaryClient = Format-TiTCSummaryCell -Value $MSPCompanyName -Width 55
+$summaryTenant = Format-TiTCSummaryCell -Value $report.TenantName -Width 55
+$summaryScore = Format-TiTCSummaryCell -Value "$($summary.OverallScore)/100 ($($summary.OverallRating))" -Width 55
+$summaryFindings = Format-TiTCSummaryCell -Value "$($summary.TotalFindings) total ($($summary.CriticalFindings) critical, $($summary.HighFindings) high)" -Width 55
+$summaryFrameworks = Format-TiTCSummaryCell -Value ($frameworksToRun -join ', ') -Width 55
+$summaryOutput = Format-TiTCSummaryCell -Value $OutputPath -Width 55
+$summaryScoreColor = if ($summary.OverallScore -gt 60) {'Red'} elseif ($summary.OverallScore -gt 30) {'Yellow'} else {'Green'}
+
 Write-Host ""
 Write-Host "  ┌──────────────────────────────────────────────────────────────────┐" -ForegroundColor Green
 Write-Host "  │  MSP AUDIT PACK COMPLETE                                         │" -ForegroundColor Green
 Write-Host "  ├──────────────────────────────────────────────────────────────────┤" -ForegroundColor Green
-Write-Host "  │  Client:     $($MSPCompanyName.PadRight(55))│" -ForegroundColor White
-Write-Host "  │  Tenant:     $($report.TenantName.PadRight(55))│" -ForegroundColor White
-Write-Host "  │  Score:      $("$($summary.OverallScore)/100 ($($summary.OverallRating))".PadRight(55))│" -ForegroundColor $(if ($summary.OverallScore -gt 60) {'Red'} elseif ($summary.OverallScore -gt 30) {'Yellow'} else {'Green'})
-Write-Host "  │  Findings:   $("$($summary.TotalFindings) total ($($summary.CriticalFindings) critical, $($summary.HighFindings) high)".PadRight(55))│" -ForegroundColor White
-Write-Host "  │  Frameworks: $($frameworksToRun -join ', ')$((' ' * [Math]::Max(0, 55 - ($frameworksToRun -join ', ').Length)))│" -ForegroundColor White
-Write-Host "  │  Output:     $($OutputPath.PadRight(55))│" -ForegroundColor White
+Write-Host "  │  Client:     $summaryClient│" -ForegroundColor White
+Write-Host "  │  Tenant:     $summaryTenant│" -ForegroundColor White
+Write-Host "  │  Score:      $summaryScore│" -ForegroundColor $summaryScoreColor
+Write-Host "  │  Findings:   $summaryFindings│" -ForegroundColor White
+Write-Host "  │  Frameworks: $summaryFrameworks│" -ForegroundColor White
+Write-Host $summaryReportLine -ForegroundColor White
+if ($summaryHtmlLine) { Write-Host $summaryHtmlLine -ForegroundColor White }
+if ($summaryPdfLine) { Write-Host $summaryPdfLine -ForegroundColor White }
+Write-Host "  │  Output:     $summaryOutput│" -ForegroundColor White
 Write-Host "  └──────────────────────────────────────────────────────────────────┘" -ForegroundColor Green
 Write-Host ""
 

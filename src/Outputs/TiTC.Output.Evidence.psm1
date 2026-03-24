@@ -84,7 +84,9 @@ function Export-TiTCEvidencePack {
         Directory path for the evidence pack output.
 
     .PARAMETER Frameworks
-        Compliance frameworks to generate evidence for.
+        Compliance frameworks to generate evidence for. Use explicit names
+        (ISO27001, SOC2Lite, CyberInsurance, CISControls, InternalRisk) or
+        pass 'All' to export every supported framework.
 
     .PARAMETER CompanyName
         Branding company name for white-label MSP packs.

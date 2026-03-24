@@ -53,8 +53,8 @@ param(
     [string]$InputFormat = 'Auto',
 
     # ── AI Provider ────────────────────────────────────────────────────────────
-    [ValidateSet('Claude', 'OpenAI')]
-    [string]$Provider = 'Claude',
+    [ValidateSet('Auto', 'Claude', 'OpenAI')]
+    [string]$Provider = 'Auto',
 
     [string]$ApiKey,
 
@@ -104,17 +104,41 @@ end {
     # API KEY RESOLUTION
     # ============================================================================
 
-    # Resolve API key: param > environment variable > interactive prompt
+    # Resolve API key: param > provider-specific environment variable > interactive prompt
     if (-not $ApiKey) {
-        $ApiKey = if ($Provider -eq 'OpenAI') { $env:OPENAI_API_KEY } else { $env:ANTHROPIC_API_KEY }
+        if ($Provider -eq 'Auto') {
+            if (-not [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+                $Provider = 'Claude'
+                $ApiKey = $env:ANTHROPIC_API_KEY
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
+                $Provider = 'OpenAI'
+                $ApiKey = $env:OPENAI_API_KEY
+            }
+        }
+        else {
+            $ApiKey = if ($Provider -eq 'OpenAI') { $env:OPENAI_API_KEY } else { $env:ANTHROPIC_API_KEY }
+        }
     }
 
     if (-not $ApiKey) {
         $envVarName = if ($Provider -eq 'OpenAI') { 'OPENAI_API_KEY' } else { 'ANTHROPIC_API_KEY' }
+        if ($Provider -eq 'Auto') {
+            $envVarName = 'ANTHROPIC_API_KEY or OPENAI_API_KEY'
+        }
         Write-Host ''
-        Write-Host "  No API key found for $Provider." -ForegroundColor Yellow
+        Write-Host "  No API key found for provider selection '$Provider'." -ForegroundColor Yellow
         Write-Host "  Set `$env:$envVarName or pass -ApiKey to skip this prompt." -ForegroundColor DarkGray
         Write-Host ''
+
+        if ($Provider -eq 'Auto') {
+            Write-Host "  [1] Claude" -ForegroundColor White
+            Write-Host "  [2] OpenAI" -ForegroundColor White
+            Write-Host ''
+            $providerChoice = Read-Host "  Select provider for this session (1-2) [1]"
+            if (-not $providerChoice.Trim()) { $providerChoice = '1' }
+            $Provider = if ($providerChoice.Trim() -eq '2') { 'OpenAI' } else { 'Claude' }
+        }
 
         try {
             $secureKey = Read-Host "  Enter $Provider API key" -AsSecureString

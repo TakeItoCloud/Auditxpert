@@ -108,6 +108,18 @@ function Invoke-TiTCEntraIDCollector {
 
     $thresholds = $Config.Thresholds
     $runAll = $Checks -contains 'All'
+    $checkSupport = [ordered]@{
+        'MFA'               = 'FullySupported'
+        'PrivilegedAccess'  = 'FullySupported'
+        'ConditionalAccess' = 'FullySupported'
+        'StaleAccounts'     = 'PartiallySupported'
+        'GuestAccounts'     = 'FullySupported'
+        'Applications'      = 'FullySupported'
+        'PasswordPolicy'    = 'PartiallySupported'
+        'AuthMethods'       = 'PartiallySupported'
+        'SignInRisk'        = 'AppOnlyPreferred'
+    }
+    Initialize-TiTCCollectorCheckCatalog -Result $result -CheckSupportMap $checkSupport
 
     # ── Assessor dispatch ───────────────────────────────────────────────
     $assessors = [ordered]@{
@@ -126,12 +138,15 @@ function Invoke-TiTCEntraIDCollector {
         if ($runAll -or $Checks -contains $assessorName) {
             try {
                 Write-TiTCLog "Running check: $assessorName" -Level Info -Component $script:COMPONENT
+                $findingsBefore = @($result.Findings).Count
                 & $assessors[$assessorName]
+                Complete-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -FindingsBefore $findingsBefore
             }
             catch {
                 $errorMsg = "Check '$assessorName' failed: $($_.Exception.Message)"
                 Write-TiTCLog $errorMsg -Level Error -Component $script:COMPONENT
                 $result.Errors += $errorMsg
+                Set-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -Status Failed -Reason $errorMsg -Support $checkSupport[$assessorName]
 
                 if ($result.Status -eq 'Success') {
                     $result.Status = 'PartialSuccess'
@@ -140,6 +155,7 @@ function Invoke-TiTCEntraIDCollector {
         }
     }
 
+    Finalize-TiTCCollectorOutcome -Result $result
     $result.Complete()
 
     # Summary
@@ -1060,6 +1076,10 @@ function Test-TiTCSignInRiskPolicies {
     Write-TiTCLog "Checking sign-in risk and identity protection..." -Level Info -Component $script:COMPONENT
 
     try {
+        $riskyUsers = @()
+        $riskyUsersStatus = 'NoData'
+        $riskyUsersStatusNote = 'No active risky users were returned.'
+
         # Check for Identity Protection risk policies via CA
         $policies = (Invoke-TiTCGraphRequest `
             -Endpoint '/identity/conditionalAccess/policies' `
@@ -1118,6 +1138,8 @@ function Test-TiTCSignInRiskPolicies {
             ).value
 
             if ($riskyUsers.Count -gt 0) {
+                $riskyUsersStatus = 'Findings'
+                $riskyUsersStatusNote = "$($riskyUsers.Count) risky users are currently flagged by Identity Protection."
                 $highRisk = $riskyUsers | Where-Object { $_.riskLevel -eq 'high' }
 
                 $severity = if ($highRisk.Count -gt 0) { 'Critical' } else { 'High' }
@@ -1141,13 +1163,33 @@ function Test-TiTCSignInRiskPolicies {
             }
         }
         catch {
-            Write-TiTCLog "Could not check risky users (requires Identity Protection): $_" -Level Debug -Component $script:COMPONENT
+            $errorText = $_.Exception.Message
+
+            if ($errorText -like '*Insufficient permissions for /identityProtection/riskyUsers*') {
+                $riskyUsers = @()
+                $riskyUsersStatus = 'SkippedInsufficientPermissions'
+                $riskyUsersStatusNote = 'Risky users check skipped: delegated permissions, admin consent, or tenant licensing do not allow access to /identityProtection/riskyUsers.'
+
+                Write-TiTCLog $riskyUsersStatusNote -Level Warning -Component $script:COMPONENT
+                $Result.Warnings += 'Risky users check skipped: insufficient delegated permission, admin consent, or Entra ID P2 licensing for Identity Protection.'
+                Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'SignInRisk' -Status SkippedInsufficientPermissions -Reason $riskyUsersStatusNote -Support 'AppOnlyPreferred'
+            }
+            else {
+                $riskyUsers = @()
+                $riskyUsersStatus = 'Unavailable'
+                $riskyUsersStatusNote = "Risky users query failed: $errorText"
+
+                Write-TiTCLog "Could not check risky users: $errorText" -Level Warning -Component $script:COMPONENT
+                $Result.Warnings += 'Risky users check could not be completed due to an unexpected Identity Protection query failure.'
+            }
         }
 
         $Result.RawData['SignInRisk'] = @{
             HasSignInRiskPolicy = ($signInRiskPolicy.Count -gt 0)
             HasUserRiskPolicy   = ($userRiskPolicy.Count -gt 0)
             RiskyUsersCount     = $riskyUsers.Count
+            RiskyUsersStatus    = $riskyUsersStatus
+            RiskyUsersStatusNote = $riskyUsersStatusNote
         }
     }
     catch {

@@ -53,6 +53,28 @@ $script:RISKY_RULE_ACTIONS = @(
     'ModifyMessageHeader'
 )
 
+function Set-TiTCExchangeSkippedCheck {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CheckName,
+
+        [Parameter(Mandatory)]
+        [string]$Reason,
+
+        [Parameter(Mandatory)]
+        $Result
+    )
+
+    Write-TiTCLog $Reason -Level Warning -Component $script:COMPONENT
+    $Result.Warnings += $Reason
+    Set-TiTCCollectorCheckOutcome -Result $Result -CheckName $CheckName -Status SkippedUnsupportedMode -Reason $Reason -Support 'ExchangeOnlineManagementRequired'
+    $Result.RawData[$CheckName] = @{
+        Status = 'Skipped'
+        Reason = $Reason
+    }
+}
+
 # ============================================================================
 # MAIN COLLECTOR ENTRY POINT
 # ============================================================================
@@ -100,6 +122,18 @@ function Invoke-TiTCExchangeCollector {
     }
 
     $runAll = $Checks -contains 'All'
+    $checkSupport = [ordered]@{
+        'ExternalForwarding' = 'PartiallySupported'
+        'TransportRules'     = 'ExchangeOnlineManagementRequired'
+        'AntiPhishing'       = 'ExchangeOnlineManagementRequired'
+        'MailboxAuditing'    = 'PartiallySupported'
+        'SharedMailboxes'    = 'ExchangeOnlineManagementRequired'
+        'DomainSecurity'     = 'FullySupported'
+        'OWAPolicy'          = 'ExchangeOnlineManagementRequired'
+        'Connectors'         = 'ExchangeOnlineManagementRequired'
+        'MailEnabledGroups'  = 'PartiallySupported'
+    }
+    Initialize-TiTCCollectorCheckCatalog -Result $result -CheckSupportMap $checkSupport
 
     # Check if Exchange Online module is available for deep checks
     $exoConnected = $false
@@ -116,7 +150,7 @@ function Invoke-TiTCExchangeCollector {
         'TransportRules'     = { Test-TiTCTransportRules -Config $Config -Result $result -ExoConnected $exoConnected }
         'AntiPhishing'       = { Test-TiTCAntiPhishingPolicies -Config $Config -Result $result -ExoConnected $exoConnected }
         'MailboxAuditing'    = { Test-TiTCMailboxAuditing -Config $Config -Result $result }
-        'SharedMailboxes'    = { Test-TiTCSharedMailboxSecurity -Config $Config -Result $result }
+        'SharedMailboxes'    = { Test-TiTCSharedMailboxSecurity -Config $Config -Result $result -ExoConnected $exoConnected }
         'DomainSecurity'     = { Test-TiTCDomainEmailSecurity -Config $Config -Result $result }
         'OWAPolicy'          = { Test-TiTCOWAPolicy -Config $Config -Result $result -ExoConnected $exoConnected }
         'Connectors'         = { Test-TiTCMailConnectors -Config $Config -Result $result -ExoConnected $exoConnected }
@@ -127,12 +161,15 @@ function Invoke-TiTCExchangeCollector {
         if ($runAll -or $Checks -contains $assessorName) {
             try {
                 Write-TiTCLog "Running check: $assessorName" -Level Info -Component $script:COMPONENT
+                $findingsBefore = @($result.Findings).Count
                 & $assessors[$assessorName]
+                Complete-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -FindingsBefore $findingsBefore
             }
             catch {
                 $errorMsg = "Check '$assessorName' failed: $($_.Exception.Message)"
                 Write-TiTCLog $errorMsg -Level Error -Component $script:COMPONENT
                 $result.Errors += $errorMsg
+                Set-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -Status Failed -Reason $errorMsg -Support $checkSupport[$assessorName]
 
                 if ($result.Status -eq 'Success') {
                     $result.Status = 'PartialSuccess'
@@ -146,6 +183,7 @@ function Invoke-TiTCExchangeCollector {
         try { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue } catch {}
     }
 
+    Finalize-TiTCCollectorOutcome -Result $result
     $result.Complete()
 
     $summary = $result.ToSummary()
@@ -347,9 +385,10 @@ function Test-TiTCTransportRules {
     Write-TiTCLog "Checking transport rules..." -Level Info -Component $script:COMPONENT
 
     if (-not $ExoConnected) {
-        Write-TiTCLog "Transport rules require ExchangeOnlineManagement. Skipping unsupported Graph fallback." -Level Warning -Component $script:COMPONENT
-        $Result.Warnings += "Transport rule analysis requires ExchangeOnlineManagement module for full coverage."
-        Test-TiTCAutoForwardingPolicy -Config $Config -Result $Result
+        Set-TiTCExchangeSkippedCheck `
+            -CheckName 'TransportRules' `
+            -Reason 'Transport rule analysis requires ExchangeOnlineManagement. Skipping unsupported Graph fallback.' `
+            -Result $Result
         return
     }
     else {
@@ -524,8 +563,10 @@ function Test-TiTCAntiPhishingPolicies {
     Write-TiTCLog "Checking anti-phishing configuration..." -Level Info -Component $script:COMPONENT
 
     if (-not $ExoConnected) {
-        Write-TiTCLog "Anti-phishing deep check requires ExchangeOnlineManagement. Skipping unsupported Graph fallback." -Level Warning -Component $script:COMPONENT
-        $Result.Warnings += "Anti-phishing policy check requires ExchangeOnlineManagement module for full coverage."
+        Set-TiTCExchangeSkippedCheck `
+            -CheckName 'AntiPhishing' `
+            -Reason 'Anti-phishing deep check requires ExchangeOnlineManagement. Skipping unsupported Graph fallback.' `
+            -Result $Result
         return
     }
 
@@ -684,82 +725,57 @@ function Test-TiTCSharedMailboxSecurity {
     [CmdletBinding()]
     param(
         [hashtable]$Config,
-        $Result
+        $Result,
+        [bool]$ExoConnected
     )
 
     Write-TiTCLog "Checking shared mailbox security..." -Level Info -Component $script:COMPONENT
 
-    # Get shared mailboxes (they are users with specific recipientType)
+    if (-not $ExoConnected) {
+        Set-TiTCExchangeSkippedCheck `
+            -CheckName 'SharedMailboxes' `
+            -Reason 'Shared mailbox analysis requires ExchangeOnlineManagement. Skipping unsupported Graph fallback.' `
+            -Result $Result
+        return
+    }
+
     try {
-        $sharedMailboxes = (Invoke-TiTCGraphRequest `
-            -Endpoint '/users' `
-            -Select 'id,displayName,userPrincipalName,accountEnabled,mail,assignedLicenses' `
-            -Filter "mailboxSettings/userPurpose eq 'shared'" `
-            -Beta `
-            -AllPages `
-            -Component $script:COMPONENT
-        ).value
+        $sharedMailboxes = if (Get-Command Get-EXOMailbox -ErrorAction SilentlyContinue) {
+            @(Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited)
+        }
+        else {
+            @(Get-Mailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited)
+        }
     }
     catch {
-        # Fallback — filter might not be supported on all tenants
-        Write-TiTCLog "Shared mailbox filter not available. Skipping shared mailbox check." -Level Warning -Component $script:COMPONENT
+        Set-TiTCExchangeSkippedCheck `
+            -CheckName 'SharedMailboxes' `
+            -Reason "Shared mailbox analysis could not be completed through ExchangeOnlineManagement: $($_.Exception.Message)" `
+            -Result $Result
         return
     }
 
     $Result.ObjectsScanned += $sharedMailboxes.Count
 
-    # Check for shared mailboxes with sign-in enabled
-    $signInEnabled = $sharedMailboxes | Where-Object { $_.accountEnabled -eq $true }
-
-    if ($signInEnabled.Count -gt 0) {
-        $Result.Findings += New-TiTCFinding `
-            -Title "Shared mailboxes with direct sign-in enabled" `
-            -Description "$($signInEnabled.Count) shared mailboxes have interactive sign-in enabled. Shared mailboxes should be blocked from direct sign-in to prevent credential sharing and ensure access is only through delegation." `
-            -Severity Medium `
-            -Domain Exchange `
-            -RiskWeight 5 `
-            -Remediation "Block sign-in for all shared mailboxes: Set-MsolUser -UserPrincipalName <UPN> -BlockCredential `$true. Access shared mailboxes only through Full Access delegation or Outlook auto-mapping." `
-            -RemediationUrl 'https://learn.microsoft.com/microsoft-365/admin/email/about-shared-mailboxes' `
-            -RemediationScript @'
-# Block sign-in for shared mailboxes
-$sharedMailboxes | ForEach-Object {
-    Update-MgUser -UserId $_.id -AccountEnabled:$false
-    Write-Output "Blocked sign-in: $($_.userPrincipalName)"
-}
-'@ `
-            -ComplianceControls @('ISO27001:A.9.2.4', 'CIS:2.5.1', 'NIST:AC-2(10)') `
-            -AffectedResources ($signInEnabled | ForEach-Object { $_.userPrincipalName } | Select-Object -First 30) `
-            -Evidence @{
-                TotalShared     = $sharedMailboxes.Count
-                SignInEnabled   = $signInEnabled.Count
-            } `
-            -DetectedBy $script:COMPONENT `
-            -Tags @('SharedMailbox', 'SignIn', 'AccessControl')
-    }
-
-    # Check for shared mailboxes with licenses (unnecessary cost)
-    $licensedShared = $sharedMailboxes | Where-Object {
-        $_.assignedLicenses -and $_.assignedLicenses.Count -gt 0
-    }
-
-    if ($licensedShared.Count -gt 0) {
-        $Result.Findings += New-TiTCFinding `
-            -Title "Shared mailboxes with assigned licenses" `
-            -Description "$($licensedShared.Count) shared mailboxes have user licenses assigned. Shared mailboxes do not require licenses unless they exceed 50GB or need archive/litigation hold, representing potential cost waste." `
-            -Severity Low `
-            -Domain Exchange `
-            -RiskWeight 3 `
-            -Remediation "Review licenses assigned to shared mailboxes. Remove unnecessary licenses. Shared mailboxes under 50GB do not require a license." `
-            -AffectedResources ($licensedShared | ForEach-Object { $_.userPrincipalName } | Select-Object -First 20) `
-            -Evidence @{ LicensedSharedCount = $licensedShared.Count } `
-            -DetectedBy $script:COMPONENT `
-            -Tags @('SharedMailbox', 'License', 'CostOptimization')
-    }
+    # Exchange Online exposes shared mailbox inventory reliably, but sign-in state and
+    # license assignment remain directory properties. Capture a reviewable inventory
+    # without issuing unsupported Graph fallback queries in interactive mode.
+    $signInEnabled = @()
+    $licensedShared = @()
 
     $Result.RawData['SharedMailboxes'] = @{
+        Status        = 'InventoryOnly'
         Total         = $sharedMailboxes.Count
         SignInEnabled = $signInEnabled.Count
         Licensed      = $licensedShared.Count
+        Note          = 'Shared mailbox inventory collected via ExchangeOnlineManagement. Direct sign-in and license assignment validation are not queried through unsupported Graph fallback paths.'
+        Mailboxes     = $sharedMailboxes | Select-Object -First 100 | ForEach-Object {
+            @{
+                DisplayName       = $_.DisplayName
+                UserPrincipalName = $_.UserPrincipalName
+                PrimarySmtp       = $_.PrimarySmtpAddress.ToString()
+            }
+        }
     }
 
     Write-TiTCLog "Shared mailbox check complete: $($sharedMailboxes.Count) shared mailboxes" -Level Info -Component $script:COMPONENT
@@ -785,7 +801,8 @@ function Test-TiTCDomainEmailSecurity {
         -Component $script:COMPONENT
     ).value
 
-    $domains = $org[0].verifiedDomains | Where-Object { $_.type -eq 'Managed' }
+    $orgEntry = if ($org -is [System.Collections.IList]) { $org[0] } else { $org }
+    $domains = if ($orgEntry) { @($orgEntry.verifiedDomains | Where-Object { $_.type -eq 'Managed' }) } else { @() }
 
     $Result.ObjectsScanned += $domains.Count
 

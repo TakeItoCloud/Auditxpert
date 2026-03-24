@@ -15,7 +15,8 @@
       "Bash(grep -n \"param\\\\|Top\\\\|$top\\\\|AllPages\" \"c:\\\\Scripts\\\\Assessment\\\\AuditXpert\\\\src\\\\Core\\\\TiTC.Core.psm1\")",
       "Bash(pwsh -NoProfile -Command \":*)",
       "Bash(grep -n \"^function Test-TiTCPrivilegedAccess\\\\|^function Test-TiTCCompliancePolicies\\\\|^function Test-TiTCOSUpdateCompliance\" /c/Scripts/Assessment/AuditXpert/src/Collectors/TiTC.Collector.*.psm1)",
-      "Bash(pwsh -ExecutionPolicy Bypass -Command \":*)"
+      "Bash(pwsh -ExecutionPolicy Bypass -Command \":*)",
+      "Read(//c/Scripts/Assessment/AuditXpert/**)"
     ]
   }
 }

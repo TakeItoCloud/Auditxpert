@@ -187,16 +187,20 @@ function Connect-TiTCGraph {
     [CmdletBinding(DefaultParameterSetName = 'Interactive')]
     param(
         [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
         [string]$TenantId,
 
         [Parameter(Mandatory, ParameterSetName = 'ClientSecret')]
         [Parameter(Mandatory, ParameterSetName = 'Certificate')]
+        [ValidateNotNullOrEmpty()]
         [string]$ClientId,
 
         [Parameter(Mandatory, ParameterSetName = 'ClientSecret')]
+        [ValidateNotNullOrEmpty()]
         [string]$ClientSecret,
 
         [Parameter(Mandatory, ParameterSetName = 'Certificate')]
+        [ValidateNotNullOrEmpty()]
         [string]$CertificateThumbprint,
 
         [Parameter(ParameterSetName = 'Interactive')]
@@ -218,6 +222,29 @@ function Connect-TiTCGraph {
 
     process {
         try {
+            if ([string]::IsNullOrWhiteSpace($TenantId)) {
+                throw "TenantId is required."
+            }
+
+            switch ($PSCmdlet.ParameterSetName) {
+                'ClientSecret' {
+                    if ([string]::IsNullOrWhiteSpace($ClientId)) {
+                        throw "Client secret authentication requires ClientId."
+                    }
+                    if ([string]::IsNullOrWhiteSpace($ClientSecret)) {
+                        throw "Client secret authentication requires ClientSecret."
+                    }
+                }
+                'Certificate' {
+                    if ([string]::IsNullOrWhiteSpace($ClientId)) {
+                        throw "Certificate authentication requires ClientId."
+                    }
+                    if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+                        throw "Certificate authentication requires CertificateThumbprint."
+                    }
+                }
+            }
+
             # ── Validate prerequisites ──────────────────────────────────
             foreach ($mod in $RequiredModules) {
                 if (-not (Get-Module -ListAvailable -Name $mod)) {
@@ -384,6 +411,248 @@ function Test-TiTCConnection {
 # GRAPH API WRAPPER
 # ============================================================================
 
+function Get-TiTCGraphErrorDetails {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $ErrorRecord,
+
+        [string]$RequestUri,
+        [string]$Endpoint,
+        [string]$Method = 'GET'
+    )
+
+    $statusCode = $null
+    $statusText = $null
+    $responseMessage = $null
+    $graphCode = $null
+    $innerCode = $null
+
+    if ($ErrorRecord.Exception.Response) {
+        $statusCode = $ErrorRecord.Exception.Response.StatusCode.value__
+        $statusText = $ErrorRecord.Exception.Response.StatusCode.ToString()
+    }
+
+    $errorBody = $null
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $errorBody = $ErrorRecord.ErrorDetails.Message
+    }
+
+    if (-not $errorBody) {
+        $exceptionMessage = $ErrorRecord.Exception.Message
+        if ($exceptionMessage -and $exceptionMessage.TrimStart().StartsWith('{')) {
+            $errorBody = $exceptionMessage
+        }
+    }
+
+    if ($errorBody) {
+        try {
+            $parsedBody = $errorBody | ConvertFrom-Json -ErrorAction Stop
+            if ($parsedBody.error) {
+                $responseMessage = $parsedBody.error.message
+                $graphCode = $parsedBody.error.code
+                if ($parsedBody.error.innerError -and $parsedBody.error.innerError.code) {
+                    $innerCode = $parsedBody.error.innerError.code
+                }
+            }
+        }
+        catch {
+            $responseMessage = $errorBody
+        }
+    }
+
+    if (-not $responseMessage) {
+        $responseMessage = $ErrorRecord.Exception.Message
+    }
+
+    return [ordered]@{
+        Method          = $Method
+        Endpoint        = $Endpoint
+        RequestUri      = $RequestUri
+        StatusCode      = $statusCode
+        StatusText      = $statusText
+        GraphCode       = $graphCode
+        InnerCode       = $innerCode
+        ResponseMessage = $responseMessage
+    }
+}
+
+function Get-TiTCGraphErrorCategory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$ErrorDetails
+    )
+
+    $message = [string]$ErrorDetails.ResponseMessage
+    $statusCode = $ErrorDetails.StatusCode
+
+    if ($statusCode -eq 405) {
+        return 'MethodNotAllowed'
+    }
+
+    if ($statusCode -eq 403) {
+        if ($message -match 'delegated|application permissions|app-only|not supported for delegated|only available to application') {
+            return 'UnsupportedEndpointDelegated'
+        }
+
+        return 'InsufficientPermissions'
+    }
+
+    if ($statusCode -eq 400) {
+        if ($message -match "top query" -or ($message -match "limit of '.+' for Top query")) {
+            return 'InvalidTop'
+        }
+
+        if ($message -match '\$filter| filter ' -or $message -match 'Unsupported or invalid query filter clause') {
+            return 'UnsupportedFilter'
+        }
+
+        if ($message -match 'not supported in delegated|only available to application permissions|unsupported segment|resource not found for the segment') {
+            return 'UnsupportedEndpointDelegated'
+        }
+
+        return 'BadRequest'
+    }
+
+    return 'GraphRequestFailed'
+}
+
+function Format-TiTCGraphRequestTarget {
+    [CmdletBinding()]
+    param(
+        [string]$RequestUri,
+        [string]$Endpoint
+    )
+
+    if ($RequestUri) {
+        try {
+            $uri = [System.Uri]$RequestUri
+            return '{0}{1}' -f $uri.AbsolutePath, $uri.Query
+        }
+        catch {
+            return $RequestUri
+        }
+    }
+
+    return $Endpoint
+}
+
+function Initialize-TiTCCollectorCheckCatalog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Result,
+
+        [hashtable]$CheckSupportMap = @{}
+    )
+
+    if (-not $Result.PSObject.Properties['Metadata']) {
+        Add-Member -InputObject $Result -MemberType NoteProperty -Name Metadata -Value @{} -Force
+    }
+    elseif (-not $Result.Metadata) {
+        $Result.Metadata = @{}
+    }
+
+    if (-not $Result.Metadata['CheckResults']) {
+        $Result.Metadata['CheckResults'] = @{}
+    }
+
+    foreach ($checkName in $CheckSupportMap.Keys) {
+        if (-not $Result.Metadata['CheckResults'].ContainsKey($checkName)) {
+            $Result.Metadata['CheckResults'][$checkName] = [ordered]@{
+                Name    = $checkName
+                Support = $CheckSupportMap[$checkName]
+                Status  = 'Pending'
+                Reason  = $null
+            }
+        }
+    }
+}
+
+function Set-TiTCCollectorCheckOutcome {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Result,
+
+        [Parameter(Mandatory)]
+        [string]$CheckName,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('Pending', 'Passed', 'FindingDetected', 'SkippedInsufficientPermissions', 'SkippedUnsupportedMode', 'SkippedFeatureUnavailable', 'Failed')]
+        [string]$Status,
+
+        [string]$Reason,
+        [string]$Support
+    )
+
+    Initialize-TiTCCollectorCheckCatalog -Result $Result
+
+    $existing = if ($Result.Metadata['CheckResults'].ContainsKey($CheckName)) {
+        $Result.Metadata['CheckResults'][$CheckName]
+    }
+    else {
+        @{}
+    }
+
+    $Result.Metadata['CheckResults'][$CheckName] = [ordered]@{
+        Name    = $CheckName
+        Support = if ($Support) { $Support } elseif ($existing.Support) { $existing.Support } else { 'FullySupported' }
+        Status  = $Status
+        Reason  = $Reason
+    }
+}
+
+function Complete-TiTCCollectorCheckOutcome {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Result,
+
+        [Parameter(Mandatory)]
+        [string]$CheckName,
+
+        [int]$FindingsBefore = 0
+    )
+
+    Initialize-TiTCCollectorCheckCatalog -Result $Result
+    $existing = $Result.Metadata['CheckResults'][$CheckName]
+    if ($existing -and $existing.Status -and $existing.Status -notin @('Pending', 'Passed', 'FindingDetected')) {
+        return
+    }
+
+    $status = if (@($Result.Findings).Count -gt $FindingsBefore) { 'FindingDetected' } else { 'Passed' }
+    Set-TiTCCollectorCheckOutcome -Result $Result -CheckName $CheckName -Status $status -Support $existing.Support -Reason $existing.Reason
+}
+
+function Finalize-TiTCCollectorOutcome {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Result
+    )
+
+    $checkResults = @()
+    if ($Result.Metadata -and $Result.Metadata['CheckResults']) {
+        $checkResults = @($Result.Metadata['CheckResults'].Values)
+    }
+
+    if ($checkResults.Count -eq 0) {
+        return
+    }
+
+    $failedCount = @($checkResults | Where-Object { $_.Status -eq 'Failed' }).Count
+    $nonSkippedCount = @($checkResults | Where-Object { $_.Status -notlike 'Skipped*' }).Count
+
+    if ($failedCount -gt 0 -and $Result.Status -eq 'Success') {
+        $Result.Status = 'PartialSuccess'
+    }
+    elseif ($nonSkippedCount -eq 0) {
+        $Result.Status = 'Skipped'
+    }
+}
+
 function Invoke-TiTCGraphRequest {
     <#
     .SYNOPSIS
@@ -494,7 +763,14 @@ function Invoke-TiTCGraphRequest {
                     }
                 }
                 catch {
-                    $statusCode = $_.Exception.Response.StatusCode.value__
+                    $errorDetails = Get-TiTCGraphErrorDetails `
+                        -ErrorRecord $_ `
+                        -RequestUri $currentUri `
+                        -Endpoint $Endpoint `
+                        -Method $Method
+                    $statusCode = $errorDetails.StatusCode
+                    $requestTarget = Format-TiTCGraphRequestTarget -RequestUri $currentUri -Endpoint $Endpoint
+                    $errorCategory = Get-TiTCGraphErrorCategory -ErrorDetails $errorDetails
 
                     if ($statusCode -eq 429) {
                         # Throttled — respect Retry-After header
@@ -512,16 +788,27 @@ function Invoke-TiTCGraphRequest {
                         $retryCount++
                     }
                     elseif ($statusCode -eq 403) {
-                        Write-TiTCLog "Forbidden (403): Insufficient permissions for $Endpoint" -Level Error -Component $Component
-                        throw "Insufficient permissions for $Endpoint. Ensure the app has the required Graph API permissions."
+                        $graphErrorMessage = if ($errorDetails.ResponseMessage) { $errorDetails.ResponseMessage } else { 'The request was forbidden by Microsoft Graph.' }
+                        $logMessage = "Graph request failed [$errorCategory] $Method $requestTarget -> 403 Forbidden. $graphErrorMessage"
+                        Write-TiTCLog $logMessage -Level Error -Component $Component
+                        throw "Insufficient permissions for $Endpoint. $graphErrorMessage"
                     }
                     elseif ($statusCode -eq 404) {
-                        Write-TiTCLog "Not found (404): $Endpoint" -Level Warning -Component $Component
+                        Write-TiTCLog "Not found (404): $Method $requestTarget" -Level Warning -Component $Component
                         return @{ value = @() }
                     }
                     else {
-                        Write-TiTCLog "Graph API error: $($_.Exception.Message)" -Level Error -Component $Component
-                        throw
+                        $graphErrorMessage = if ($errorDetails.ResponseMessage) { $errorDetails.ResponseMessage } else { $_.Exception.Message }
+                        $codeSuffix = if ($errorDetails.GraphCode) { " [Code: $($errorDetails.GraphCode)]" } else { '' }
+                        $statusLabel = if ($errorDetails.StatusCode) {
+                            '{0} {1}' -f $errorDetails.StatusCode, $errorDetails.StatusText
+                        }
+                        else {
+                            'UnknownStatus'
+                        }
+                        $logMessage = "Graph request failed [$errorCategory] $Method $requestTarget -> $statusLabel. $graphErrorMessage$codeSuffix"
+                        Write-TiTCLog $logMessage -Level Error -Component $Component
+                        throw "Graph request failed [$errorCategory] for $Endpoint. $graphErrorMessage"
                     }
                 }
             }
@@ -899,7 +1186,7 @@ function Write-TiTCAssessmentSummary {
     param(
         [object]$Report,           # TiTCAssessmentReport or hashtable
 
-        [hashtable]$CollectorResults,  # @{ Domain = TiTCCollectorResult }
+        [object]$CollectorResults,  # TiTCCollectorResult[] or @{ Domain = TiTCCollectorResult }
 
         [hashtable]$Outputs = @{}, # @{ Report = path; Evidence = path; AIReport = path; Data = path; Log = path }
 
@@ -924,18 +1211,37 @@ function Write-TiTCAssessmentSummary {
 
     # Collector stats
     $collectorLines = ''
-    if ($CollectorResults) {
-        $ran = $CollectorResults.Count
-        $succeeded = ($CollectorResults.Values | Where-Object { -not $_.Failed }).Count
-        $failed    = $ran - $succeeded
-        $collectorLines += "  Collectors:    $ran ran, $succeeded succeeded, $failed failed`n"
-        foreach ($domain in $CollectorResults.Keys) {
-            $r        = $CollectorResults[$domain]
+    $collectorList = @()
+    if ($CollectorResults -is [System.Collections.IDictionary]) {
+        $collectorList = @($CollectorResults.Values)
+    }
+    elseif ($CollectorResults) {
+        $collectorList = @($CollectorResults)
+    }
+
+    if ($collectorList.Count -gt 0) {
+        $ran = $collectorList.Count
+        $succeeded = @($collectorList | Where-Object { $_.Status -in @('Success', 'Skipped') }).Count
+        $failed    = @($collectorList | Where-Object { $_.Status -eq 'Failed' }).Count
+        $partial   = @($collectorList | Where-Object { $_.Status -eq 'PartialSuccess' }).Count
+        $collectorLines += "  Collectors:    $ran ran, $succeeded complete, $partial partial, $failed failed`n"
+        foreach ($r in $collectorList) {
+            $domain = $r.Domain.ToString()
             $fCount   = if ($r.Findings) { $r.Findings.Count } else { 0 }
             $critical = if ($r.Findings) { ($r.Findings | Where-Object { $_.Severity -eq 'Critical' }).Count } else { 0 }
             $high     = if ($r.Findings) { ($r.Findings | Where-Object { $_.Severity -eq 'High' }).Count } else { 0 }
             $checks   = if ($r.ObjectsScanned -gt 0) { $r.ObjectsScanned } else { '?' }
-            $collectorLines += "    $($domain.PadRight(12)) $checks checks → $fCount findings ($critical critical, $high high)`n"
+            $checkResults = if ($r.Metadata -and $r.Metadata['CheckResults']) { @($r.Metadata['CheckResults'].Values) } else { @() }
+            $passedChecks = @($checkResults | Where-Object { $_.Status -eq 'Passed' }).Count
+            $findingChecks = @($checkResults | Where-Object { $_.Status -eq 'FindingDetected' }).Count
+            $permSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedInsufficientPermissions' }).Count
+            $modeSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedUnsupportedMode' }).Count
+            $featureSkipped = @($checkResults | Where-Object { $_.Status -eq 'SkippedFeatureUnavailable' }).Count
+            $failedChecks = @($checkResults | Where-Object { $_.Status -eq 'Failed' }).Count
+            $collectorLines += "    $($domain.PadRight(12)) [$($r.Status)] $checks checks → $fCount findings ($critical critical, $high high)`n"
+            if ($checkResults.Count -gt 0) {
+                $collectorLines += "                  checks: $passedChecks passed, $findingChecks findings, $permSkipped permission-skipped, $modeSkipped mode-skipped, $featureSkipped feature-skipped, $failedChecks failed`n"
+            }
         }
     }
 
@@ -1218,6 +1524,10 @@ Export-ModuleMember -Function @(
 
     # Graph API
     'Invoke-TiTCGraphRequest'
+    'Initialize-TiTCCollectorCheckCatalog'
+    'Set-TiTCCollectorCheckOutcome'
+    'Complete-TiTCCollectorCheckOutcome'
+    'Finalize-TiTCCollectorOutcome'
 
     # Config
     'Get-TiTCConfig'

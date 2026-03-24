@@ -85,6 +85,16 @@ function Invoke-TiTCDefenderCollector {
     }
 
     $runAll = $Checks -contains 'All'
+    $checkSupport = [ordered]@{
+        'SecureScore'                 = 'PartiallySupported'
+        'SecurityAlerts'              = 'AppOnlyPreferred'
+        'Incidents'                   = 'AppOnlyPreferred'
+        'DefenderForEndpointCoverage' = 'PartiallySupported'
+        'EmailThreatPolicies'         = 'PartiallySupported'
+        'AttackSimulation'            = 'AppOnlyPreferred'
+        'AutoInvestigation'           = 'AppOnlyPreferred'
+    }
+    Initialize-TiTCCollectorCheckCatalog -Result $result -CheckSupportMap $checkSupport
 
     # ── Assessor dispatch ───────────────────────────────────────────────
     $assessors = [ordered]@{
@@ -101,12 +111,15 @@ function Invoke-TiTCDefenderCollector {
         if ($runAll -or $Checks -contains $assessorName) {
             try {
                 Write-TiTCLog "Running check: $assessorName" -Level Info -Component $script:COMPONENT
+                $findingsBefore = @($result.Findings).Count
                 & $assessors[$assessorName]
+                Complete-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -FindingsBefore $findingsBefore
             }
             catch {
                 $errorMsg = "Check '$assessorName' failed: $($_.Exception.Message)"
                 Write-TiTCLog $errorMsg -Level Error -Component $script:COMPONENT
                 $result.Errors += $errorMsg
+                Set-TiTCCollectorCheckOutcome -Result $result -CheckName $assessorName -Status Failed -Reason $errorMsg -Support $checkSupport[$assessorName]
 
                 if ($result.Status -eq 'Success') {
                     $result.Status = 'PartialSuccess'
@@ -115,6 +128,7 @@ function Invoke-TiTCDefenderCollector {
         }
     }
 
+    Finalize-TiTCCollectorOutcome -Result $result
     $result.Complete()
 
     $summary = $result.ToSummary()
@@ -142,6 +156,7 @@ function Test-TiTCSecureScore {
         $scoreData = (Invoke-TiTCGraphRequest `
             -Endpoint '/security/secureScores' `
             -Select 'id,currentScore,maxScore,averageComparativeScores,createdDateTime,enabledServices' `
+            -Top 1 `
             -Component $script:COMPONENT
         ).value | Select-Object -First 1
     }
@@ -229,12 +244,15 @@ function Test-TiTCSecurityAlerts {
             -Endpoint '/security/alerts_v2' `
             -Select 'id,title,severity,status,createdDateTime,classification,serviceSource,detectorId' `
             -Filter "status ne 'resolved'" `
-            -AllPages `
+            -Top 50 `
             -Component $script:COMPONENT
         ).value
     }
     catch {
         Write-TiTCLog "Could not retrieve security alerts: $_" -Level Warning -Component $script:COMPONENT
+        $reason = $_.Exception.Message
+        $status = if ($reason -like '*Insufficient permissions for /security/alerts_v2*') { 'SkippedInsufficientPermissions' } else { 'SkippedFeatureUnavailable' }
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'SecurityAlerts' -Status $status -Reason $reason -Support 'AppOnlyPreferred'
         return
     }
 
@@ -329,16 +347,22 @@ function Test-TiTCIncidents {
 
     $activeIncidents = @()
     try {
+        # Graph /security/incidents enforces a maximum page size of 50.
+        # Keep -AllPages enabled so larger tenants still page through @odata.nextLink.
         $activeIncidents = (Invoke-TiTCGraphRequest `
             -Endpoint '/security/incidents' `
             -Select 'id,displayName,severity,status,createdDateTime,lastUpdateDateTime,classification,determination' `
             -Filter "status ne 'resolved'" `
+            -Top 50 `
             -AllPages `
             -Component $script:COMPONENT
         ).value
     }
     catch {
         Write-TiTCLog "Could not retrieve incidents: $_" -Level Warning -Component $script:COMPONENT
+        $reason = $_.Exception.Message
+        $status = if ($reason -like '*Insufficient permissions for /security/incidents*') { 'SkippedInsufficientPermissions' } else { 'SkippedFeatureUnavailable' }
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'Incidents' -Status $status -Reason $reason -Support 'AppOnlyPreferred'
         return
     }
 
@@ -589,6 +613,7 @@ function Test-TiTCAttackSimulation {
     catch {
         Write-TiTCLog "Could not retrieve attack simulation data (may require Attack Simulator license): $_" -Level Warning -Component $script:COMPONENT
         $Result.Warnings += "Attack Simulation check skipped — endpoint unavailable (requires Microsoft Defender for Office 365 Plan 2 or Microsoft 365 E5)"
+        Set-TiTCCollectorCheckOutcome -Result $Result -CheckName 'AttackSimulation' -Status SkippedFeatureUnavailable -Reason 'Attack Simulation requires Defender for Office 365 Plan 2 / Microsoft 365 E5 or equivalent permissions.' -Support 'AppOnlyPreferred'
         return
     }
 
